@@ -1,5 +1,8 @@
-import React from 'react';
-import {X, Printer, Share2, QrCode, Smartphone, CheckCircle, ShieldCheck} from 'lucide-react';
+import React, {useEffect} from 'react';
+import {X, Printer, Share2, QrCode, Smartphone, CheckCircle, ShieldCheck, Copy} from 'lucide-react';
+import {doc, setDoc} from 'firebase/firestore';
+import {db} from '../lib/firebase';
+import {generatePatientToken} from '../lib/patientAuth';
 
 interface Props {
   patientName: string;
@@ -8,18 +11,30 @@ interface Props {
 }
 
 export default function PatientQRCardModal({patientName, patientId, onClose}: Props) {
-  // Generate portal access URL (points to current origin with portal parameter)
+  // Generate secure token and portal access URL
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://cardios-clinic.app';
-  const portalUrl = `${currentOrigin}/?patientId=${patientId}&portal=true`;
+  const patientToken = generatePatientToken(patientId);
+  const portalUrl = `${currentOrigin}/?patientId=${patientId}&portal=true&token=${patientToken}`;
   const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(portalUrl)}&color=1e3a8a&bgcolor=ffffff`;
+
+  // Ensure patient document in Firestore has this exact token stored
+  useEffect(() => {
+    try {
+      const pRef = doc(db, 'patients', patientId);
+      setDoc(pRef, {accessToken: patientToken, securityToken: patientToken}, {merge: true});
+    } catch (e) {
+      console.warn('Failed to sync patient token to firestore:', e);
+    }
+  }, [patientId, patientToken]);
 
   const handleShareWhatsApp = () => {
     const text = `*كارت المتابعة الذكية - Cardios Cardiovascular Center* 🫀
 عزيزي المريض: *${patientName}*
 رقم الملف: #${patientId}
+رمز التحقق الأمني: ${patientToken}
 
-حرصاً على سلامة قلبك واستقرار ضغط الدم، تم تفعيل بوابة المتابعة المنزلية الخاصة بك.
-📱 *رابط الدخول المباشر لحسابك:*
+حرصاً على سلامة قلبك واستقرار ضغط الدم، تم تفعيل بوابة المتابعة المنزلية المشفرة الخاصة بك.
+📱 *رابط الدخول الآمن والمباشر لحسابك:*
 ${portalUrl}
 
 *من خلال الرابط يمكنك:*
@@ -74,7 +89,13 @@ ${portalUrl}
             <div className="p-2.5 bg-blue-50/70 rounded-xl border border-blue-100 mb-4">
               <span className="text-[11px] text-gray-500 block">اسم المريض (Patient Name)</span>
               <p className="font-bold text-blue-900 text-base">{patientName}</p>
-              <span className="text-[10px] text-gray-400">File ID: #{patientId}</span>
+              <div className="flex items-center justify-center gap-3 mt-1 text-[10px] text-gray-500">
+                <span>File ID: #{patientId}</span>
+                <span>•</span>
+                <span className="font-mono bg-white px-2 py-0.5 rounded border border-blue-200 text-blue-700 font-bold">
+                  رمز الأمان: {patientToken}
+                </span>
+              </div>
             </div>
 
             {/* QR Code Container */}

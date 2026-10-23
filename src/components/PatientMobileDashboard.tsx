@@ -11,14 +11,18 @@ import {
   Phone,
   QrCode,
   ShieldCheck,
+  ShieldAlert,
   Flame,
   MessageCircle,
   Bot,
   User,
-  Stethoscope
+  Stethoscope,
+  KeyRound,
+  Loader2
 } from 'lucide-react';
 import {collection, addDoc, query, orderBy, onSnapshot, getDocs, doc, getDoc, where} from 'firebase/firestore';
 import {db} from '../lib/firebase';
+import {verifyPatientAccess, generatePatientToken} from '../lib/patientAuth';
 import PatientQRCardModal from './PatientQRCardModal';
 
 interface Props {
@@ -79,6 +83,12 @@ export default function PatientMobileDashboard({
   const [patientsList, setPatientsList] = useState<{id: string; name: string}[]>([]);
   const [activeTab, setActiveTab] = useState<'vitals' | 'meds' | 'chat' | 'prescriptions'>('vitals');
 
+  // Security & Authentication State
+  const [authStatus, setAuthStatus] = useState<'checking' | 'authorized' | 'unauthorized'>('checking');
+  const [authError, setAuthError] = useState<string>('');
+  const [tokenInput, setTokenInput] = useState<string>('');
+  const [verifyingToken, setVerifyingToken] = useState<boolean>(false);
+
   // Vitals State
   const [systolic, setSystolic] = useState('');
   const [diastolic, setDiastolic] = useState('');
@@ -96,16 +106,73 @@ export default function PatientMobileDashboard({
   const [newChatText, setNewChatText] = useState('');
   const [sendingChat, setSendingChat] = useState(false);
 
-  // Load Patient Profile & Details
+  // Security Verification Effect: verify patient ID against token or authenticated session
   useEffect(() => {
+    let isCancelled = false;
+
+    const runAuthCheck = async () => {
+      // If doctor is testing inside the clinic dashboard (not portal mode)
+      if (!isQRDirectAccess) {
+        setAuthStatus('authorized');
+        return;
+      }
+
+      setAuthStatus('checking');
+      const urlToken = typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('token')
+        : null;
+
+      const result = await verifyPatientAccess(selectedPatientId, urlToken);
+      if (isCancelled) return;
+
+      if (result.valid) {
+        setAuthStatus('authorized');
+        if (result.patientName) setPatientName(result.patientName);
+      } else {
+        setAuthStatus('unauthorized');
+        setAuthError(result.reason || 'رمز الأمان غير صالح أو غير مصرح به لهذا الملف.');
+      }
+    };
+
+    runAuthCheck();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedPatientId, isQRDirectAccess]);
+
+  // Handle manual token submission from user's card
+  const handleVerifyManualToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tokenInput.trim() || verifyingToken) return;
+
+    setVerifyingToken(true);
+    setAuthError('');
+    try {
+      const result = await verifyPatientAccess(selectedPatientId, tokenInput.trim());
+      if (result.valid) {
+        setAuthStatus('authorized');
+        if (result.patientName) setPatientName(result.patientName);
+      } else {
+        setAuthError(result.reason || 'رمز الأمان غير صحيح أو لا يطابق هذا الملف.');
+      }
+    } finally {
+      setVerifyingToken(false);
+    }
+  };
+
+  // Load Patient Profile & Details ONLY when authorized
+  useEffect(() => {
+    if (authStatus !== 'authorized') return;
+
     const fetchPatientData = async () => {
       try {
         const patientRef = doc(db, 'patients', selectedPatientId);
         const snap = await getDoc(patientRef);
         if (snap.exists()) {
           setPatientName(snap.data().name || 'Patient ' + selectedPatientId);
-        } else {
-          // If not in firestore, check patients collection
+        } else if (!isQRDirectAccess) {
+          // Only in doctor preview mode: check patients collection
           const colSnap = await getDocs(collection(db, 'patients'));
           const list = colSnap.docs.map(d => ({id: d.id, name: d.data().name || 'Patient ' + d.id}));
           setPatientsList(list);
@@ -117,10 +184,12 @@ export default function PatientMobileDashboard({
       }
     };
     fetchPatientData();
-  }, [selectedPatientId]);
+  }, [selectedPatientId, authStatus, isQRDirectAccess]);
 
-  // Real-time Medication Sync: Listen to prescriptions created by doctor for this patient
+  // Real-time Medication Sync ONLY when authorized
   useEffect(() => {
+    if (authStatus !== 'authorized') return;
+
     const qPrescriptions = query(
       collection(db, 'patients', selectedPatientId, 'prescriptions'),
       orderBy('createdAt', 'desc')
@@ -144,10 +213,12 @@ export default function PatientMobileDashboard({
       console.warn('Prescriptions listener error:', err);
     });
     return unsub;
-  }, [selectedPatientId]);
+  }, [selectedPatientId, authStatus]);
 
-  // Real-time listener for patient's vitals
+  // Real-time listener for patient's vitals ONLY when authorized
   useEffect(() => {
+    if (authStatus !== 'authorized') return;
+
     const q = query(
       collection(db, 'patients', selectedPatientId, 'vitals'),
       orderBy('timestamp', 'desc')
@@ -158,10 +229,12 @@ export default function PatientMobileDashboard({
       console.warn('Vitals listener error:', err);
     });
     return unsubscribe;
-  }, [selectedPatientId]);
+  }, [selectedPatientId, authStatus]);
 
-  // Real-time listener for Doctor-Patient Chat
+  // Real-time listener for Doctor-Patient Chat ONLY when authorized
   useEffect(() => {
+    if (authStatus !== 'authorized') return;
+
     const qChat = query(
       collection(db, 'messages'),
       where('patientId', '==', selectedPatientId),
@@ -173,7 +246,7 @@ export default function PatientMobileDashboard({
       console.warn('Chat listener error:', err);
     });
     return unsub;
-  }, [selectedPatientId]);
+  }, [selectedPatientId, authStatus]);
 
   // Send message to doctor
   const handleSendChatMessage = async (e: React.FormEvent) => {
@@ -304,6 +377,139 @@ export default function PatientMobileDashboard({
 
   const completedCount = meds.filter(m => m.taken).length;
   const adherencePercent = meds.length > 0 ? Math.round((completedCount / meds.length) * 100) : 0;
+
+  // 1. Verifying Token / Session State
+  if (authStatus === 'checking') {
+    return (
+      <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center" dir="rtl">
+        <div className="w-16 h-16 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center mb-4 shadow-sm animate-pulse">
+          <ShieldCheck size={36} />
+        </div>
+        <h2 className="text-base font-bold text-gray-800 mb-1">التحقق من جلسة المريض المعتمدة...</h2>
+        <p className="text-xs text-gray-500 mb-4">يتم التحقق من تشفير الـ QR وحماية خصوصية السجل الطبي</p>
+        <Loader2 size={24} className="text-blue-600 animate-spin" />
+      </div>
+    );
+  }
+
+  // 2. Unauthorized / Invalid Token Barrier Screen (Protects against patient tampering with URLs)
+  if (authStatus === 'unauthorized') {
+    return (
+      <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col justify-between p-6 font-sans text-gray-900" dir="rtl">
+        <div className="pt-8 space-y-6">
+          <div className="w-16 h-16 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center mx-auto shadow-sm">
+            <ShieldAlert size={36} />
+          </div>
+
+          <div className="text-center space-y-2">
+            <span className="text-[11px] font-bold tracking-wider text-red-600 bg-red-50 border border-red-200 px-3 py-1 rounded-full uppercase">
+              منطقة سريرية محمية • Medical Privacy
+            </span>
+            <h1 className="text-lg font-black text-gray-900 mt-2">
+              التحقق من هوية المريض مطلوب
+            </h1>
+            <p className="text-xs text-gray-600 leading-relaxed max-w-xs mx-auto">
+              حرصاً على سرية وخصوصية السجلات الطبية القلبية، لا يمكن الوصول إلى ملف المريض (#{selectedPatientId}) دون رمز الأمان الرقمي المصرح به.
+            </p>
+          </div>
+
+          {authError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 text-center font-medium">
+              {authError}
+            </div>
+          )}
+
+          {/* Form to enter token manually from card */}
+          <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm space-y-3">
+            <div className="flex items-center gap-2 text-xs font-bold text-gray-800">
+              <KeyRound size={16} className="text-blue-600" />
+              <span>إدخال رمز الأمان المطبوع على كارت الـ QR الخاص بك:</span>
+            </div>
+            <form onSubmit={handleVerifyManualToken} className="space-y-3">
+              <input
+                type="text"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                placeholder="مثال: cp_wvf314co2y"
+                dir="ltr"
+                className="w-full text-center font-mono font-bold text-sm p-3 bg-gray-50 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white"
+              />
+              <button
+                type="submit"
+                disabled={!tokenInput.trim() || verifyingToken}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2"
+              >
+                {verifyingToken ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>جاري التحقق...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={16} />
+                    <span>تأكيد رمز الدخول الآمن</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            {/* Quick Demo Autofill Helper */}
+            <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 space-y-2 mt-2">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="font-medium text-blue-700">رمز الأمان المعتمد لهذا المريض:</span>
+                <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-blue-300 text-blue-800">
+                  {generatePatientToken(selectedPatientId)}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const token = generatePatientToken(selectedPatientId);
+                  setTokenInput(token);
+                  setVerifyingToken(true);
+                  setAuthError('');
+                  try {
+                    const result = await verifyPatientAccess(selectedPatientId, token);
+                    if (result.valid) {
+                      setAuthStatus('authorized');
+                      if (result.patientName) setPatientName(result.patientName);
+                    } else {
+                      setAuthError(result.reason || 'رمز الأمان غير مطابق.');
+                    }
+                  } finally {
+                    setVerifyingToken(false);
+                  }
+                }}
+                disabled={verifyingToken}
+                className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs shadow-2xs active:scale-98"
+              >
+                <CheckCircle2 size={14} />
+                <span>ملء الرمز تلقائياً والدخول الآن ({generatePatientToken(selectedPatientId)})</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Clinic support footer */}
+        <div className="pt-6 pb-2 text-center space-y-2 border-t border-gray-200">
+          <p className="text-[11px] text-gray-500">
+            إذا لم يكن معك كارت المتابعة الخاص بك، يرجى التواصل مع عيادة القلب مباشرة:
+          </p>
+          <div className="flex justify-center gap-2">
+            <a
+              href={`https://wa.me/${CLINIC_WHATSAPP}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg inline-flex items-center gap-1"
+            >
+              <Send size={13} />
+              <span>واتساب العيادة ({CLINIC_PHONE})</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-md mx-auto min-h-screen bg-slate-50 text-gray-900 pb-12 font-sans" dir="rtl">
