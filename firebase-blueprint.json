@@ -1,0 +1,22 @@
+{
+  "entities": {
+    "Message": {
+      "title": "Message",
+      "description": "Chat message between doctor and patient",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string" },
+        "sender": { "type": "string" },
+        "text": { "type": "string", "maxLength": 1000 },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["patientId", "sender", "text", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Collection of chat messages"
+    }
+  }
+}

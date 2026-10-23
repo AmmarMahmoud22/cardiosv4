@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@media print {
+  @page {
+    size: A4;
+    margin: 1.5cm;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 12pt;
+  }
+
+  /* Hide interactive floating and navigation components */
+  .no-print,
+  nav,
+  header,
+  footer,
+  aside,
+  button,
+  input,
+  select,
+  textarea,
+  .fixed,
+  [role="dialog"] > div:first-child {
+    display: none !important;
+  }
+
+  /* Visibility isolation for printable reports and prescriptions */
+  body * {
+    visibility: hidden;
+  }
+
+  .printable,
+  .printable * {
+    visibility: visible !important;
+  }
+
+  .printable {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  /* Print specific header and footer */
+  .print-header {
+    display: block !important;
+    border-bottom: 2px solid #1e3a8a;
+    padding-bottom: 12px;
+    margin-bottom: 20px;
+  }
+
+  .print-footer {
+    display: block !important;
+    margin-top: 40px;
+    padding-top: 15px;
+    border-top: 1px solid #94a3b8;
+  }
+}

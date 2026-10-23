@@ -1,0 +1,6 @@
+{
+  "summary":  "Technical architecture for the Cardios platform, covering the frontend (React/Vite), backend (Express/Node.js), database (PostgreSQL), and key integration patterns.",
+  "updatedAt":  "2026-10-21T13:25:58.932341476Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
