@@ -46,10 +46,17 @@ export default function App() {
     }
   }, []);
 
+  const navigateTo = (newView: 'landing' | 'dashboard' | 'portal' | 'lab-portal') => {
+    if (typeof window !== 'undefined' && window.history && window.location.search) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    setView(newView);
+  };
+
   const handleDoctorLogout = () => {
     setDoctorAuthenticated(false);
     setDoctorAuthed(false);
-    setView('landing');
+    navigateTo('landing');
   };
 
   return (
@@ -60,7 +67,7 @@ export default function App() {
           <PatientMobileDashboard
             patientId={portalPatientId}
             isPortalMode={true}
-            onBack={() => setView('landing')}
+            onBack={() => navigateTo('landing')}
             onOpenAuth={() => {
               setAuthRole('patient');
               setAuthModalMode('login');
@@ -72,7 +79,7 @@ export default function App() {
 
       {/* 2. Laboratory Portal Access */}
       {view === 'lab-portal' && (
-        <LaboratoryPortal onBack={() => setView('landing')} />
+        <LaboratoryPortal onBack={() => navigateTo('landing')} />
       )}
 
       {/* 3. Landing Page */}
@@ -80,12 +87,12 @@ export default function App() {
         <LandingPage
           onLaunch={() => {
             setDoctorAuthed(true);
-            setView('dashboard');
+            navigateTo('dashboard');
           }}
-          onOpenLabPortal={() => setView('lab-portal')}
+          onOpenLabPortal={() => navigateTo('lab-portal')}
           onOpenPatientPortal={(pId) => {
             setPortalPatientId(pId || '1');
-            setView('portal');
+            navigateTo('portal');
           }}
           onOpenAuthModal={(role) => {
             setAuthRole(role || 'doctor');
@@ -132,7 +139,11 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <Dashboard onLogout={handleDoctorLogout} doctorName={doctorName} />
+          <Dashboard
+            onLogout={handleDoctorLogout}
+            onBackToLanding={() => navigateTo('landing')}
+            doctorName={doctorName}
+          />
         )
       )}
 

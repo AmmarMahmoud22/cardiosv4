@@ -13,7 +13,8 @@ import {
   Sparkles,
   ShieldCheck,
   Calendar as CalendarIcon,
-  Plus
+  Plus,
+  Home
 } from 'lucide-react';
 import {useTranslation} from 'react-i18next';
 import PatientTable from './PatientTable';
@@ -30,9 +31,11 @@ const CLINIC_HOTLINE = '01146963589';
 
 export default function Dashboard({
   onLogout,
+  onBackToLanding,
   doctorName = 'استشاري أمراض القلب'
 }: {
   onLogout?: () => void;
+  onBackToLanding?: () => void;
   doctorName?: string;
 }) {
   const {t, i18n} = useTranslation();
@@ -127,6 +130,16 @@ export default function Dashboard({
               <Plus size={14} />
               <span>مريض جديد</span>
             </button>
+            {onBackToLanding && (
+              <button
+                onClick={onBackToLanding}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
+                title="العودة لصفحة الهبوط الرئيسية"
+              >
+                <Home size={14} className="text-emerald-400" />
+                <span>صفحة الهبوط الرئيسية</span>
+              </button>
+            )}
             {onLogout && (
               <button
                 onClick={onLogout}
@@ -134,7 +147,7 @@ export default function Dashboard({
                 className="flex items-center gap-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl text-xs font-bold border border-red-200 transition-colors"
               >
                 <Lock size={14} />
-                <span>قفل السجلات</span>
+                <span>خروج</span>
               </button>
             )}
           </div>
