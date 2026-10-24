@@ -28,7 +28,13 @@ import GeminiChat from './GeminiChat';
 
 const CLINIC_HOTLINE = '01146963589';
 
-export default function Dashboard({onLogout}: {onLogout?: () => void}) {
+export default function Dashboard({
+  onLogout,
+  doctorName = 'استشاري أمراض القلب'
+}: {
+  onLogout?: () => void;
+  doctorName?: string;
+}) {
   const {t, i18n} = useTranslation();
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'patients' | 'calendar' | 'patientPortal'>('patients');
@@ -50,19 +56,21 @@ export default function Dashboard({onLogout}: {onLogout?: () => void}) {
       <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 via-indigo-600 to-blue-800 text-white flex items-center justify-center shadow-md">
-              <Stethoscope size={24} />
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-700 p-0.5 flex items-center justify-center text-white shadow-md overflow-hidden shrink-0">
+              <div className="w-full h-full bg-slate-900 rounded-[14px] flex items-center justify-center">
+                <Stethoscope size={22} className="text-blue-400" />
+              </div>
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-black text-slate-900">Cardios Clinical EHR</h1>
+                <h1 className="text-xl sm:text-2xl font-black text-slate-900">لوحة الطبيب السريرية (Doctor EHR)</h1>
                 <span className="text-[11px] font-bold bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full border border-blue-200">
-                  عيادة القلب التخصصية
+                  Cardios Clinic
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
-                <span>د. إسلام الشريف - استشاري أمراض القلب والقسطرة</span>
-                <span>• هاتف العيادة والحالات الحرجة: <strong className="text-blue-600 font-mono">{CLINIC_HOTLINE}</strong></span>
+                <span>{doctorName} - استشاري أمراض القلب والقسطرة</span>
+                <span>• منظومة المتابعة والربط المباشر مع معامل التحاليل</span>
               </p>
             </div>
           </div>
@@ -227,6 +235,25 @@ export default function Dashboard({onLogout}: {onLogout?: () => void}) {
 
       {/* Floating Global AI Assistant */}
       <GeminiChat />
+
+      {/* Modals */}
+      {showNewPatient && (
+        <NewPatientModal
+          onClose={() => setShowNewPatient(false)}
+          onPatientAdded={(id) => {
+            setSelectedPatientId(id);
+            setShowNewPatient(false);
+          }}
+        />
+      )}
+
+      {showPrescriptionModal && (
+        <PrescriptionModal onClose={() => setShowPrescriptionModal(false)} />
+      )}
+
+      {showReportsModal && (
+        <ReportsModal onClose={() => setShowReportsModal(false)} />
+      )}
     </div>
   );
 }

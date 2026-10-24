@@ -275,12 +275,15 @@ ${doctorNotes}
             {/* Prescription Header */}
             <div className="border-b-2 border-blue-900 pb-4 mb-6 print-header">
               <div className="flex justify-between items-start">
-                <div>
-                  <h1 className="text-xl font-black text-blue-900 tracking-tight">DR. CARDIOS CARDIOVASCULAR CLINIC</h1>
-                  <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-0.5">
-                    Consultant of Cardiology & Interventional Angiography
-                  </p>
-                  <p className="text-[11px] text-gray-500">M.D. Cardiology, FESC • Cairo, Egypt</p>
+                <div className="flex items-center gap-3">
+                  <img src="/assets/aistudio/image_54a63720.png" alt="د/ عمار محمود" className="h-14 w-auto object-contain" />
+                  <div>
+                    <h1 className="text-xl font-black text-blue-900 tracking-tight">عيادة د/ عمار محمود لأمراض القلب والقسطرة</h1>
+                    <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-0.5">
+                      Consultant of Cardiology & Interventional Angiography
+                    </p>
+                    <p className="text-[11px] text-gray-500">M.D. Cardiology • Cairo, Egypt</p>
+                  </div>
                 </div>
                 <div className="text-right">
                   <span className="text-xs font-bold text-blue-900 px-3 py-1 bg-blue-50 border border-blue-200 rounded uppercase">
@@ -303,7 +306,7 @@ ${doctorNotes}
               </div>
               <div>
                 <span className="text-gray-500 font-medium">Specialty:</span>
-                <p className="font-semibold text-gray-700 mt-0.5">Cardiology & Hypertension</p>
+                <p className="font-semibold text-gray-700 mt-0.5">Cardiology & Interventional Angiography</p>
               </div>
             </div>
 
@@ -355,15 +358,15 @@ ${doctorNotes}
             {/* Official Signature Footer */}
             <div className="pt-6 border-t border-gray-300 flex justify-between items-end text-xs text-gray-600 print-footer">
               <div>
-                <p className="font-bold text-gray-800">Cardios Clinic Digital Prescription</p>
-                <p className="text-[11px] text-gray-400">Emergency Hotline: 16XXX • Clinic Support</p>
+                <p className="font-bold text-gray-800">عيادة د/ عمار محمود - روشتة إلكترونية معتمدة</p>
+                <p className="text-[11px] text-gray-400">Emergency Hotline: 01146963589</p>
               </div>
               <div className="text-right">
                 <p className="text-xs text-gray-400 mb-6">Physician Signature & Stamp:</p>
-                <div className="w-44 border-b-2 border-gray-800 pb-1 text-center font-serif text-sm font-bold text-gray-800">
-                  Dr. Cardios, MD
+                <div className="w-52 border-b-2 border-gray-800 pb-1 text-center font-bold text-gray-900">
+                  د/ عمار محمود
                 </div>
-                <p className="text-[10px] text-gray-500 mt-1">Consultant of Cardiology</p>
+                <p className="text-[10px] text-gray-500 mt-1">استشاري أمراض القلب والقسطرة</p>
               </div>
             </div>
           </div>

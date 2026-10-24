@@ -11,12 +11,51 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["patientId", "sender", "text", "timestamp"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "Cardiology clinic patient medical record and user profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "authUid": { "type": "string" },
+        "name": { "type": "string", "maxLength": 200 },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "dob": { "type": "string" },
+        "status": { "type": "string" },
+        "diagnosis": { "type": "string" },
+        "securityToken": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name"]
+    },
+    "Vital": {
+      "title": "Vital",
+      "description": "Blood pressure and heart rate measurement logged by patient or clinic",
+      "type": "object",
+      "properties": {
+        "systolic": { "type": "number" },
+        "diastolic": { "type": "number" },
+        "heartRate": { "type": "number" },
+        "patientId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["systolic", "diastolic", "patientId", "timestamp"]
     }
   },
   "firestore": {
     "/messages/{messageId}": {
       "schema": "Message",
       "description": "Collection of chat messages"
+    },
+    "/patients/{patientId}": {
+      "schema": "Patient",
+      "description": "Collection of patient clinical files"
+    },
+    "/patients/{patientId}/vitals/{vitalId}": {
+      "schema": "Vital",
+      "description": "Subcollection of vital sign readings"
     }
   }
 }

@@ -28,23 +28,23 @@ export default function PatientQRCardModal({patientName, patientId, onClose}: Pr
   }, [patientId, patientToken]);
 
   const handleShareWhatsApp = () => {
-    const text = `*كارت المتابعة الذكية - Cardios Cardiovascular Center* 🫀
+    const text = `*كارت المتابعة الذكية - عيادة د/ عمار محمود* 🫀
 عزيزي المريض: *${patientName}*
 رقم الملف: #${patientId}
 رمز التحقق الأمني: ${patientToken}
 
-حرصاً على سلامة قلبك واستقرار ضغط الدم، تم تفعيل بوابة المتابعة المنزلية المشفرة الخاصة بك.
-📱 *رابط الدخول الآمن والمباشر لحسابك:*
+حرصاً على سلامة قلبك واستقرار ضغط الدم، تم تفعيل بوابة المتابعة المنزلية الخاصة بك.
+📱 *رابط الدخول المباشر لحسابك:*
 ${portalUrl}
 
 *من خلال الرابط يمكنك:*
 ✅ تسجيل قياسات الضغط والنبض يومياً لتصل لطبيبك لحظياً.
 ✅ متابعة مواعيد أخذ الأدوية والجرعات اليومية.
-✅ تحميل أحدث روشتة وتقارير الفحوصات الطبية.
-✅ مراسلة طبيبك المعالج مباشرة عبر البوابة.
+✅ تحميل أحدث روشتة ونتائج معمل الأزهري للتحاليل.
+✅ مراسلة د/ عمار محمود مباشرة عبر البوابة.
 
 📞 *هاتف العيادة المباشر:* 01146963589
-👨‍⚕️ عيادة د. القلب والأوعية الدموية - Cardios`;
+👨‍⚕️ عيادة د/ عمار محمود - استشاري أمراض القلب والقسطرة`;
 
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
   };
@@ -60,7 +60,7 @@ ${portalUrl}
             </div>
             <div>
               <h3 className="font-bold text-sm">Patient Smart QR Access Card</h3>
-              <p className="text-[11px] text-blue-200/80">كارت الوصول الذكي لبوابة المريض</p>
+              <p className="text-[11px] text-blue-200/80">كارت الوصول الذكي - عيادة د/ عمار محمود</p>
             </div>
           </div>
           <button
@@ -78,11 +78,12 @@ ${portalUrl}
 
             {/* Clinic Info */}
             <div className="mb-4">
+              <img src="/assets/aistudio/image_54a63720.png" alt="د/ عمار محمود" className="h-14 w-auto object-contain mx-auto mb-2" />
               <span className="text-[10px] font-bold text-blue-900 tracking-widest uppercase bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
-                Cardios Remote Monitoring
+                Dr. Ammar Mahmoud Clinic
               </span>
-              <h2 className="text-lg font-black text-gray-900 mt-1.5">CARDIOS CLINIC</h2>
-              <p className="text-[11px] text-gray-500">عيادة أمراض القلب والأوعية الدموية</p>
+              <h2 className="text-lg font-black text-gray-900 mt-1">عيادة د/ عمار محمود</h2>
+              <p className="text-[11px] text-gray-500">استشاري أمراض القلب والأوعية الدموية والقسطرة</p>
             </div>
 
             {/* Patient Name badge */}

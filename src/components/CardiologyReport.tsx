@@ -500,12 +500,15 @@ ${data.recommendations}
         {/* Print Header */}
         <div className="border-b-2 border-blue-900 pb-4 mb-6">
           <div className="flex justify-between items-start">
-            <div>
-              <h1 className="text-2xl font-black tracking-tight text-blue-900">CARDIOS CARDIOVASCULAR CENTER</h1>
-              <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-0.5">
-                Specialized Cardiology, Echocardiography & Vascular Clinic
-              </p>
-              <p className="text-xs text-gray-500">Cairo, Egypt • Comprehensive Cardiovascular Diagnostic Services</p>
+            <div className="flex items-center gap-3">
+              <img src="/assets/aistudio/image_54a63720.png" alt="د/ عمار محمود" className="h-14 w-auto object-contain" />
+              <div>
+                <h1 className="text-xl font-black tracking-tight text-blue-900">عيادة د/ عمار محمود لأمراض القلب والقسطرة</h1>
+                <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-0.5">
+                  Specialized Cardiology, Echocardiography & Interventional Angiography
+                </p>
+                <p className="text-xs text-gray-500">Cairo, Egypt • Comprehensive Diagnostic Services</p>
+              </div>
             </div>
             <div className="text-right">
               <span className="text-xs font-bold text-blue-900 uppercase px-2.5 py-1 bg-blue-50 border border-blue-200 rounded">
@@ -676,15 +679,15 @@ ${data.recommendations}
         {/* Official Signature Footer */}
         <div className="pt-6 border-t border-gray-300 flex justify-between items-end text-xs text-gray-600 print-footer">
           <div>
-            <p className="font-bold text-gray-800">Cardios Cardiovascular Clinic</p>
+            <p className="font-bold text-gray-800">عيادة د/ عمار محمود لأمراض القلب والقسطرة</p>
             <p className="text-[11px] text-gray-500">Certified Digital Medical Record • Egypt</p>
           </div>
           <div className="text-right">
             <p className="text-xs text-gray-400 mb-6">Physician Signature & Stamp:</p>
-            <div className="w-48 border-b-2 border-gray-800 pb-1 text-center font-serif text-sm font-bold text-gray-800">
-              Dr. Cardios, MD, FESC
+            <div className="w-52 border-b-2 border-gray-800 pb-1 text-center font-bold text-gray-900">
+              د/ عمار محمود
             </div>
-            <p className="text-[10px] text-gray-500 mt-1">Consultant of Cardiology & Angiography</p>
+            <p className="text-[10px] text-gray-500 mt-1">استشاري أمراض القلب والقسطرة</p>
           </div>
         </div>
       </div>

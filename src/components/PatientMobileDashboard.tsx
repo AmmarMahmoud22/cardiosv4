@@ -18,7 +18,10 @@ import {
   User,
   Stethoscope,
   KeyRound,
-  Loader2
+  Loader2,
+  LogOut,
+  ArrowRight,
+  HeartPulse
 } from 'lucide-react';
 import {collection, addDoc, query, orderBy, onSnapshot, getDocs, doc, getDoc, where} from 'firebase/firestore';
 import {db} from '../lib/firebase';
@@ -28,6 +31,8 @@ import PatientQRCardModal from './PatientQRCardModal';
 interface Props {
   patientId?: string;
   isPortalMode?: boolean;
+  onBack?: () => void;
+  onOpenAuth?: () => void;
 }
 
 interface MedicationSchedule {
@@ -71,7 +76,9 @@ const DEFAULT_MEDS: MedicationSchedule[] = [
 
 export default function PatientMobileDashboard({
   patientId: initialPatientId = '1',
-  isPortalMode = false
+  isPortalMode = false,
+  onBack,
+  onOpenAuth
 }: Props) {
   // Check if opened via URL QR parameter (?portal=true)
   const isQRDirectAccess = typeof window !== 'undefined'
@@ -81,13 +88,26 @@ export default function PatientMobileDashboard({
   const [selectedPatientId, setSelectedPatientId] = useState<string>(initialPatientId);
   const [patientName, setPatientName] = useState<string>('Ahmed Hassan');
   const [patientsList, setPatientsList] = useState<{id: string; name: string}[]>([]);
-  const [activeTab, setActiveTab] = useState<'vitals' | 'meds' | 'chat' | 'prescriptions'>('vitals');
+  const [activeTab, setActiveTab] = useState<'vitals' | 'meds' | 'chat' | 'prescriptions' | 'labs'>('vitals');
+  const [patientData, setPatientData] = useState<any>(null);
+  const [showDocScanViewer, setShowDocScanViewer] = useState(false);
 
   // Security & Authentication State
   const [authStatus, setAuthStatus] = useState<'checking' | 'authorized' | 'unauthorized'>('checking');
   const [authError, setAuthError] = useState<string>('');
   const [tokenInput, setTokenInput] = useState<string>('');
   const [verifyingToken, setVerifyingToken] = useState<boolean>(false);
+
+  // Real-time listener for patient document (labs, doctor orders, etc.)
+  useEffect(() => {
+    if (authStatus !== 'authorized') return;
+    const unsub = onSnapshot(doc(db, 'patients', selectedPatientId), (snap) => {
+      if (snap.exists()) {
+        setPatientData(snap.data());
+      }
+    });
+    return unsub;
+  }, [selectedPatientId, authStatus]);
 
   // Vitals State
   const [systolic, setSystolic] = useState('');
@@ -495,7 +515,27 @@ export default function PatientMobileDashboard({
           <p className="text-[11px] text-gray-500">
             إذا لم يكن معك كارت المتابعة الخاص بك، يرجى التواصل مع عيادة القلب مباشرة:
           </p>
-          <div className="flex justify-center gap-2">
+          <div className="flex flex-wrap justify-center gap-2 pt-1">
+            {onOpenAuth && (
+              <button
+                type="button"
+                onClick={onOpenAuth}
+                className="text-xs font-bold text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 px-3 py-1.5 rounded-lg inline-flex items-center gap-1 transition-colors"
+              >
+                <User size={13} />
+                <span>تسجيل الدخول بحسابك الشخصي</span>
+              </button>
+            )}
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="text-xs font-medium text-gray-700 bg-gray-100 border border-gray-200 hover:bg-gray-200 px-3 py-1.5 rounded-lg inline-flex items-center gap-1 transition-colors"
+              >
+                <ArrowRight size={13} />
+                <span>العودة للرئيسية</span>
+              </button>
+            )}
             <a
               href={`https://wa.me/${CLINIC_WHATSAPP}`}
               target="_blank"
@@ -517,25 +557,40 @@ export default function PatientMobileDashboard({
       <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 text-white p-5 rounded-b-3xl shadow-lg relative overflow-hidden">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-2xl bg-white/15 backdrop-blur-xs flex items-center justify-center border border-white/20">
-              <Heart className="text-red-400 animate-pulse" size={22} />
+            <div className="w-10 h-10 rounded-2xl bg-white/10 p-1 flex items-center justify-center border border-white/20 shrink-0 overflow-hidden">
+              <HeartPulse size={22} className="text-emerald-300" />
             </div>
             <div>
               <span className="text-[10px] font-bold tracking-wider text-blue-200 uppercase block">
-                Cardios Remote Care • بوابتي
+                منظومة Cardios • بوابتي الطبية
               </span>
               <h1 className="text-base font-bold">بوابة المتابعة القلبية الذكية</h1>
             </div>
           </div>
 
-          <button
-            onClick={() => setShowQRModal(true)}
-            className="p-2 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white transition-all flex items-center gap-1 text-xs"
-            title="عرض كارت الدخول السريع"
-          >
-            <QrCode size={18} />
-            <span className="hidden sm:inline">كارت QR</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setShowQRModal(true)}
+              className="p-2 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white transition-all flex items-center gap-1 text-xs"
+              title="عرض كارت الدخول السريع"
+            >
+              <QrCode size={18} />
+              <span className="hidden sm:inline">كارت QR</span>
+            </button>
+            {onBack && (
+              <button
+                onClick={() => {
+                  sessionStorage.removeItem('cardios_patient_session');
+                  onBack();
+                }}
+                className="p-2 rounded-xl bg-white/15 hover:bg-red-500/40 border border-white/20 text-white hover:text-red-100 transition-all flex items-center gap-1 text-xs"
+                title="تسجيل الخروج والعودة للصفحة الرئيسية"
+              >
+                <LogOut size={16} />
+                <span className="hidden sm:inline">خروج</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Patient Identity Badge */}
@@ -592,12 +647,12 @@ export default function PatientMobileDashboard({
         </div>
       </div>
 
-      {/* Navigation Tabs (4 Tabs: Vitals, Meds, Doctor Chat, Prescriptions) */}
+      {/* Navigation Tabs (5 Tabs: Vitals, Meds, Labs, Doctor Chat, Prescriptions) */}
       <div className="p-4">
-        <div className="bg-white p-1 rounded-2xl shadow-xs border border-gray-200 grid grid-cols-4 gap-1 text-[11px] font-bold text-gray-600">
+        <div className="bg-white p-1 rounded-2xl shadow-xs border border-gray-200 grid grid-cols-5 gap-1 text-[10px] sm:text-[11px] font-bold text-gray-600">
           <button
             onClick={() => setActiveTab('vitals')}
-            className={`py-2 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 ${
+            className={`py-2 rounded-xl transition-all flex flex-col items-center justify-center gap-0.5 ${
               activeTab === 'vitals'
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'hover:bg-gray-100 text-gray-600'
@@ -608,7 +663,7 @@ export default function PatientMobileDashboard({
           </button>
           <button
             onClick={() => setActiveTab('meds')}
-            className={`py-2 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 ${
+            className={`py-2 rounded-xl transition-all flex flex-col items-center justify-center gap-0.5 ${
               activeTab === 'meds'
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'hover:bg-gray-100 text-gray-600'
@@ -618,28 +673,42 @@ export default function PatientMobileDashboard({
             <span>الأدوية</span>
           </button>
           <button
+            onClick={() => setActiveTab('labs')}
+            className={`py-2 rounded-xl transition-all flex flex-col items-center justify-center gap-0.5 relative ${
+              activeTab === 'labs'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'hover:bg-gray-100 text-gray-600'
+            }`}
+          >
+            <FileText size={14} />
+            <span>التحاليل</span>
+            {patientData?.doctorOrder?.text && activeTab !== 'labs' && (
+              <span className="w-2 h-2 rounded-full bg-amber-500 absolute top-1 right-1 animate-ping" />
+            )}
+          </button>
+          <button
             onClick={() => setActiveTab('chat')}
-            className={`py-2 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 relative ${
+            className={`py-2 rounded-xl transition-all flex flex-col items-center justify-center gap-0.5 relative ${
               activeTab === 'chat'
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'hover:bg-gray-100 text-gray-600'
             }`}
           >
             <MessageCircle size={14} />
-            <span>محادثة الطبيب</span>
+            <span>المحادثة</span>
             {chatMessages.length > 0 && activeTab !== 'chat' && (
               <span className="w-2 h-2 rounded-full bg-emerald-500 absolute top-1 right-1" />
             )}
           </button>
           <button
             onClick={() => setActiveTab('prescriptions')}
-            className={`py-2 rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 ${
+            className={`py-2 rounded-xl transition-all flex flex-col items-center justify-center gap-0.5 ${
               activeTab === 'prescriptions'
                 ? 'bg-blue-600 text-white shadow-xs'
                 : 'hover:bg-gray-100 text-gray-600'
             }`}
           >
-            <FileText size={14} />
+            <Stethoscope size={14} />
             <span>الروشتة</span>
           </button>
         </div>
@@ -962,6 +1031,114 @@ export default function PatientMobileDashboard({
                 <Send size={16} />
               </button>
             </form>
+          </div>
+        )}
+
+        {/* TAB 5: LAB RESULTS & DOCTOR DIRECTIVES */}
+        {activeTab === 'labs' && (
+          <div className="space-y-4">
+            {/* Doctor Direct Clinical Order Card */}
+            {patientData?.doctorOrder?.text ? (
+              <div className="bg-gradient-to-r from-indigo-900 to-slate-900 text-white p-5 rounded-3xl shadow-md space-y-2 border border-indigo-700/50 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Stethoscope size={18} className="text-amber-400" />
+                    <h3 className="font-bold text-xs text-amber-300">توصية وقرار الطبيب المعالج د. إسلام الشريف</h3>
+                  </div>
+                  <span className="text-[10px] bg-amber-400/20 text-amber-200 border border-amber-400/30 px-2 py-0.5 rounded-full font-mono">
+                    جديد
+                  </span>
+                </div>
+                <p className="text-xs leading-relaxed text-indigo-100 bg-white/10 p-3 rounded-2xl border border-white/15">
+                  "{patientData.doctorOrder.text}"
+                </p>
+                <div className="text-[10px] text-slate-400 font-mono text-left">
+                  تاريخ التوصية: {patientData.doctorOrder.updatedAt ? new Date(patientData.doctorOrder.updatedAt).toLocaleDateString('ar-EG') : 'اليوم'}
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-3xl text-xs text-indigo-900 flex items-center gap-2">
+                <Stethoscope size={18} className="text-indigo-600 shrink-0" />
+                <span>طبيبك المعالج يتابع كافة التحاليل الصادرة من المختبر وسيرسل لك توصية هنا عند وجود أي تعديل.</span>
+              </div>
+            )}
+
+            {/* Latest Lab Biomarkers */}
+            <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-200 space-y-3">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <div>
+                  <h3 className="font-bold text-sm text-gray-900 flex items-center gap-2">
+                    <FileText size={16} className="text-teal-600" />
+                    <span>نتائج التحاليل المخبرية الأخيرة</span>
+                  </h3>
+                  <p className="text-[11px] text-gray-400">معتمدة من مختبر Cardios Clinical Lab</p>
+                </div>
+                <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-1 rounded-full">
+                  معتمدة
+                </span>
+              </div>
+
+              {patientData?.labs ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">كوليسترول ضار LDL</span>
+                      <span className="font-bold font-mono text-sm text-slate-800">{patientData.labs.ldl}</span>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">كرياتينين الكلى</span>
+                      <span className="font-bold font-mono text-sm text-slate-800">{patientData.labs.creatinine}</span>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">كفاءة الكلى eGFR</span>
+                      <span className="font-bold font-mono text-sm text-slate-800">{patientData.labs.egfr}</span>
+                    </div>
+                    <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">السكر التراكمي HbA1c</span>
+                      <span className="font-bold font-mono text-sm text-slate-800">{patientData.labs.hba1c}</span>
+                    </div>
+                  </div>
+
+                  {/* Attachment Document Scan */}
+                  <div className="p-3 bg-teal-50 border border-teal-200 rounded-2xl flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <FileText size={18} className="text-teal-700" />
+                      <div>
+                        <span className="font-bold text-teal-900 block">تقرير التكليف الورقي الأصلي</span>
+                        <span className="text-[10px] text-teal-700">نسخة معتمدة من المعمل (PDF Scan)</span>
+                      </div>
+                    </div>
+                    <a
+                      href={patientData.labs.attachment?.url || '#'}
+                      download="Cardios_Lab_Report.pdf"
+                      className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-xl text-[11px] transition-colors"
+                    >
+                      تنزيل الملف
+                    </a>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-6 text-center text-xs text-gray-400">
+                  سيتم عرض كرت نتائج تحاليلك هنا فور رفعها واختبارها من المعمل.
+                </div>
+              )}
+            </div>
+
+            {/* Periodic Routine Lab Reminder Schedule */}
+            <div className="bg-amber-50/80 border border-amber-200 p-4 rounded-3xl space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-900 flex items-center gap-1.5">
+                  <Clock size={16} className="text-amber-600" />
+                  جدول التحاليل الدورية الموصى بها
+                </span>
+                <span className="text-[10px] bg-amber-200 text-amber-900 font-bold px-2 py-0.5 rounded-full">
+                  تذكير العيادة
+                </span>
+              </div>
+              <p className="text-amber-800 leading-relaxed text-[11px]">
+                موعد الفحص الموصى به القادم: <strong>بعد 3 أشهر (فحص الكوليسترول الضار ووظائف الكلى والسكر التراكمي)</strong> لضمان سلامة الشرايين.
+              </p>
+            </div>
           </div>
         )}
 

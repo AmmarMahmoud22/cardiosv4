@@ -573,9 +573,11 @@ export default function PatientProfile({patientId, onBack}: {patientId: string, 
 
             <button
               onClick={() => setShowLabModal(true)}
-              className="text-xs text-blue-600 hover:underline font-bold"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition-all shadow-2xs hover:border-blue-300 active:scale-95"
             >
-              مراجعة التحاليل والدهون المرتبطة بالعلاج &larr;
+              <FileSpreadsheet size={15} className="text-blue-600" />
+              <span>مراجعة التحاليل والدهون المرتبطة بالعلاج</span>
+              <span className="text-xs">&larr;</span>
             </button>
           </div>
         </div>
