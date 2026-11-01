@@ -2,6 +2,7 @@ import React, {useState, useEffect} from 'react';
 import {X, Plus, Trash2, Printer, Share2, Pill, Check, UserCheck} from 'lucide-react';
 import {collection, getDocs, addDoc} from 'firebase/firestore';
 import {db} from '../lib/firebase';
+import PrintableMedicalDocument from './PrintableMedicalDocument';
 
 interface Props {
   onClose: () => void;
@@ -47,6 +48,7 @@ export default function PrescriptionModal({onClose}: Props) {
   const [doctorNotes, setDoctorNotes] = useState('Low salt diet. Monitor home blood pressure daily. Repeat lipid profile in 3 months.');
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [showPrintModal, setShowPrintModal] = useState(false);
 
   useEffect(() => {
     const fetchPatients = async () => {
@@ -176,11 +178,11 @@ ${doctorNotes}
               <span>Send WhatsApp</span>
             </button>
             <button
-              onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all"
+              onClick={() => setShowPrintModal(true)}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all shadow-xs cursor-pointer"
             >
               <Printer size={14} />
-              <span>Print Prescription</span>
+              <span>معاينة وطباعة الروشتة المعتمدة (A4 / PDF)</span>
             </button>
             <button
               onClick={onClose}
@@ -372,6 +374,27 @@ ${doctorNotes}
           </div>
         </div>
       </div>
+
+      {showPrintModal && (
+        <PrintableMedicalDocument
+          type="prescription"
+          data={{
+            patientName: selectedPatient?.name || 'مريض العيادة',
+            patientId: selectedPatient?.id || '1',
+            date: new Date().toLocaleDateString('ar-EG'),
+            diagnosis: 'ارتفاع ضغط الدم ومتابعة دهون الدم وصحة القلب',
+            bloodPressure: '135/85',
+            heartRate: 74,
+            medications: medications,
+            doctorNotes: doctorNotes,
+            doctorName: 'أ.د. عمار محمود',
+            doctorSpecialty: 'استشاري أمراض القلب والأوعية الدموية والقسطرة التداخلية',
+            clinicName: 'مركز CARDIOS التخصصي لأمراض القلب',
+            licenseNumber: 'ترخيص نقابة الأطباء رقم: 104825 / ج.م.ع'
+          }}
+          onClose={() => setShowPrintModal(false)}
+        />
+      )}
     </div>
   );
 }

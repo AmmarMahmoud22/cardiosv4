@@ -1,7 +1,9 @@
 import React, {useState, useEffect} from 'react';
-import {FileText, Printer, Share2, Sparkles, Check, CheckCircle2, AlertTriangle, HeartPulse, RefreshCw} from 'lucide-react';
+import {FileText, Printer, Share2, Sparkles, Check, CheckCircle2, AlertTriangle, HeartPulse, RefreshCw, Calculator} from 'lucide-react';
 import {addDoc, collection} from 'firebase/firestore';
 import {db} from '../lib/firebase';
+import PrintableMedicalDocument, {CardiologyReportData} from './PrintableMedicalDocument';
+import ClinicalCalculatorsModal from './ClinicalCalculatorsModal';
 
 interface Props {
   patientName: string;
@@ -57,6 +59,8 @@ export default function CardiologyReport({patientName, patientId}: Props) {
   const [activeTab, setActiveTab] = useState<'echo' | 'valves' | 'ecg' | 'conclusion'>('echo');
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [showCalcModal, setShowCalcModal] = useState(false);
 
   // Quick preset templates
   const applyPreset = (presetName: string) => {
@@ -187,19 +191,19 @@ ${data.recommendations}
             </button>
 
             <button
-              onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all active:scale-95"
+              onClick={() => setShowPrintModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all active:scale-95 cursor-pointer"
             >
               <Printer size={15} />
-              <span>Print Official Report</span>
+              <span>طباعة ومعاينة التقرير الرسمي A4 (PDF)</span>
             </button>
           </div>
         </div>
 
-        {/* Quick Presets Bar */}
+        {/* Quick Presets Bar & Clinical Calculators */}
         <div className="flex flex-wrap items-center gap-1.5 pt-2">
           <span className="text-xs text-gray-500 font-medium mr-1 flex items-center gap-1">
-            <Sparkles size={13} className="text-amber-500" /> Presets:
+            <Sparkles size={13} className="text-amber-500" /> نماذج جاهزة:
           </span>
           <button
             onClick={() => applyPreset('normal')}
@@ -224,6 +228,14 @@ ${data.recommendations}
             className="px-2.5 py-1 text-xs font-medium rounded-lg bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 text-gray-700 transition-colors"
           >
             Atrial Fibrillation
+          </button>
+
+          <button
+            onClick={() => setShowCalcModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 transition-colors mr-auto"
+          >
+            <Calculator size={14} className="text-blue-600" />
+            <span>حاسبات القلب السريرية (ASCVD / LVMI)</span>
           </button>
         </div>
       </div>
@@ -691,6 +703,41 @@ ${data.recommendations}
           </div>
         </div>
       </div>
+
+      {/* Official A4 Print & PDF Modal */}
+      {showPrintModal && (
+        <PrintableMedicalDocument
+          type="cardiology_report"
+          data={{
+            ...data,
+            patientName,
+            patientId,
+            date: new Date().toLocaleDateString('ar-EG'),
+            doctorName: 'أ.د. عمار محمود',
+            doctorSpecialty: 'استشاري أمراض القلب والأوعية الدموية والقسطرة التداخلية',
+            clinicName: 'مركز CARDIOS التخصصي لأمراض القلب',
+            licenseNumber: 'ترخيص نقابة الأطباء رقم: 104825 / ج.م.ع'
+          }}
+          onClose={() => setShowPrintModal(false)}
+        />
+      )}
+
+      {/* Clinical Calculators Modal */}
+      {showCalcModal && (
+        <ClinicalCalculatorsModal
+          patientName={patientName}
+          patientAge={56}
+          gender="male"
+          systolicBp={140}
+          onClose={() => setShowCalcModal(false)}
+          onApplyToReport={(summary) => {
+            setData(prev => ({
+              ...prev,
+              conclusion: prev.conclusion ? `${prev.conclusion}\n\n${summary}` : summary
+            }));
+          }}
+        />
+      )}
     </div>
   );
 }

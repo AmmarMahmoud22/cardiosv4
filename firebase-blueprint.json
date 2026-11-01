@@ -42,6 +42,58 @@
         "timestamp": { "type": "string", "format": "date-time" }
       },
       "required": ["systolic", "diastolic", "patientId", "timestamp"]
+    },
+    "Plan": {
+      "title": "Plan",
+      "description": "Dynamic customizable subscription tier configured by platform admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "price": { "type": "number" },
+        "currency": { "type": "string" },
+        "billingCycle": { "type": "string" },
+        "maxPatients": { "type": "number" },
+        "aiMonthlyQuota": { "type": "number" },
+        "isDefault": { "type": "boolean" },
+        "badgeColor": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "price", "billingCycle"]
+    },
+    "Doctor": {
+      "title": "Doctor",
+      "description": "Cardiologist practitioner clinic profile and subscription status",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 200 },
+        "clinicCode": { "type": "string" },
+        "clinicName": { "type": "string" },
+        "specialty": { "type": "string" },
+        "planId": { "type": "string" },
+        "planName": { "type": "string" },
+        "status": { "type": "string" },
+        "aiQueriesUsed": { "type": "number" },
+        "aiQuotaLimit": { "type": "number" },
+        "isAiBlocked": { "type": "boolean" }
+      },
+      "required": ["id", "name", "clinicCode"]
+    },
+    "Lab": {
+      "title": "Lab",
+      "description": "Diagnostic medical laboratory partner profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 200 },
+        "labCode": { "type": "string" },
+        "technicianName": { "type": "string" },
+        "phone": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "name", "labCode"]
     }
   },
   "firestore": {
@@ -56,6 +108,18 @@
     "/patients/{patientId}/vitals/{vitalId}": {
       "schema": "Vital",
       "description": "Subcollection of vital sign readings"
+    },
+    "/plans/{planId}": {
+      "schema": "Plan",
+      "description": "Dynamic subscription tiers managed by platform super admin"
+    },
+    "/doctors/{doctorId}": {
+      "schema": "Doctor",
+      "description": "Cardiologist accounts and subscription quotas"
+    },
+    "/labs/{labId}": {
+      "schema": "Lab",
+      "description": "Diagnostic laboratory partner accounts"
     }
   }
 }

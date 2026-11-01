@@ -255,13 +255,19 @@ export default function PatientMobileDashboard({
   useEffect(() => {
     if (authStatus !== 'authorized') return;
 
+    // Avoid composite index requirement in Firestore by filtering by patientId and sorting in-memory
     const qChat = query(
       collection(db, 'messages'),
-      where('patientId', '==', selectedPatientId),
-      orderBy('timestamp', 'asc')
+      where('patientId', '==', selectedPatientId)
     );
     const unsub = onSnapshot(qChat, (snapshot) => {
-      setChatMessages(snapshot.docs.map(doc => ({id: doc.id, ...doc.data()})));
+      const msgs = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+      msgs.sort((a: any, b: any) => {
+        const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        return timeA - timeB;
+      });
+      setChatMessages(msgs);
     }, (err) => {
       console.warn('Chat listener error:', err);
     });

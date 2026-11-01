@@ -94,9 +94,10 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
     if (!doctorRecommendation.trim()) return;
     setSendingOrder(true);
     try {
+      const activeDocName = patient?.doctorName || 'د/ عمار محمود';
       const orderPayload = {
         text: doctorRecommendation,
-        doctorName: 'د/ عمار محمود',
+        doctorName: activeDocName,
         updatedAt: new Date().toISOString(),
         readByPatient: false
       };
@@ -109,12 +110,30 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
       // 2. Dispatch alert notification to patient's phone
       await addDoc(collection(db, `patients/${patientId}/notifications`), {
         type: 'doctor_order',
-        title: 'توصية جديدة من الطبيب المعالج د. إسلام الشريف',
-        message: `بناءً على تحاليلك الأخيرة: ${doctorRecommendation}`,
+        title: `توصية وطلب تحاليل من ${activeDocName}`,
+        message: `بناءً على المتابعة السريرية: ${doctorRecommendation}`,
         createdAt: new Date().toISOString(),
         timestamp: serverTimestamp(),
         read: false
       });
+
+      // 3. Dispatch to lab_orders collection for the laboratory queue
+      try {
+        await addDoc(collection(db, 'lab_orders'), {
+          patientId,
+          patientName: patient?.name || `مريض #${patientId}`,
+          doctorId: patient?.doctorId || 'doc-1',
+          doctorName: activeDocName,
+          clinicCode: patient?.clinicCode || 'CLINIC-AMMAR-101',
+          tests: ['تحاليل مخبرية متابعة', 'وظائف كلى ودهون'],
+          priority: doctorRecommendation.includes('عاجل') || doctorRecommendation.includes('STAT') ? 'urgent' : 'routine',
+          instructions: doctorRecommendation,
+          status: 'pending',
+          createdAt: new Date().toISOString()
+        });
+      } catch (orderErr) {
+        console.warn('Notice saving lab_order:', orderErr);
+      }
 
       setOrderSentSuccess(true);
       setTimeout(() => setOrderSentSuccess(false), 4000);

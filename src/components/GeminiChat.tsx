@@ -1,5 +1,5 @@
 import React, {useState, useRef, useEffect} from 'react';
-import {Sparkles, X, Send, RotateCcw, ChevronDown, Bot, HeartPulse, UserCheck, Check, Copy, Activity, ShieldCheck, Stethoscope} from 'lucide-react';
+import {Sparkles, X, Send, RotateCcw, ChevronDown, Bot, HeartPulse, UserCheck, Check, Copy, Activity, ShieldCheck, Stethoscope, Lock} from 'lucide-react';
 
 interface ChatMessage {
   role: 'user' | 'model';
@@ -27,6 +27,8 @@ export interface PatientContext {
 interface Props {
   patientContext?: PatientContext;
   externalOpenTrigger?: number;
+  isAiBlocked?: boolean;
+  aiBlockedReason?: string;
 }
 
 const GENERAL_PROMPTS = [
@@ -36,7 +38,7 @@ const GENERAL_PROMPTS = [
   'قواعد تعديل جرعات أدوية القلب وفق وظائف الكلى و eGFR'
 ];
 
-export default function GeminiChat({patientContext, externalOpenTrigger}: Props) {
+export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlocked = false, aiBlockedReason}: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -81,6 +83,21 @@ export default function GeminiChat({patientContext, externalOpenTrigger}: Props)
     if (!messageContent || loading) return;
 
     const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+
+    if (isAiBlocked) {
+      setMessages(prev => [
+        ...prev,
+        {role: 'user', text: messageContent, time},
+        {
+          role: 'model',
+          text: `⚠️ تعذر إجراء الاستعلام الذكي!\n\n${aiBlockedReason || 'تم حظر خدمة الذكاء الاصطناعي لهذه العيادة أو استنفاد الكوتة الشهرية المحددة من قبل المشرف العام (Super Admin).'}\n\nيرجى التواصل مع إدارة المنظومة لرفع الحظر أو تزويد رصيد الاستعلامات.`,
+          time
+        }
+      ]);
+      if (!textToSend) setInput('');
+      return;
+    }
+
     const newMessages: ChatMessage[] = [
       ...messages,
       {role: 'user', text: messageContent, time}
@@ -198,8 +215,18 @@ export default function GeminiChat({patientContext, externalOpenTrigger}: Props)
             </div>
           </div>
 
-          {/* Active Patient Context Clinical Banner */}
-          {patientContext?.name ? (
+          {/* Active Patient Context Clinical Banner or Blocked Warning Banner */}
+          {isAiBlocked ? (
+            <div className="bg-red-50 border-b border-red-200 p-3 text-xs text-red-900 flex items-start gap-2.5" dir="rtl">
+              <ShieldCheck size={18} className="text-red-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold block text-red-950">خدمة الذكاء الاصطناعي موقوفة للعيادة</span>
+                <span className="text-[11px] text-red-700 block mt-0.5 leading-relaxed">
+                  {aiBlockedReason || 'تم إيقاف صلاحية الذكاء الاصطناعي أو استنفاد رصيد الباقة الشهرية من قِبل المشرف العام (Super Admin).'}
+                </span>
+              </div>
+            </div>
+          ) : patientContext?.name ? (
             <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border-b border-emerald-200/80 px-4 py-2.5 flex items-center justify-between text-xs text-emerald-950" dir="rtl">
               <div className="flex items-center gap-2 truncate">
                 <UserCheck size={16} className="text-emerald-700 shrink-0" />
@@ -238,9 +265,27 @@ export default function GeminiChat({patientContext, externalOpenTrigger}: Props)
 
           {/* Conversation Thread */}
           <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-slate-50/60" dir="rtl">
-            {messages.length === 0 ? (
+            {isAiBlocked ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4">
+                <div className="w-16 h-16 rounded-3xl bg-red-100 text-red-600 flex items-center justify-center border-2 border-red-200 shadow-lg shadow-red-500/10">
+                  <Lock size={32} />
+                </div>
+                <div>
+                  <h4 className="font-black text-slate-900 text-base">خدمة الذكاء الاصطناعي موقوفة للعيادة</h4>
+                  <p className="text-xs text-red-700 mt-2 leading-relaxed max-w-xs mx-auto">
+                    {aiBlockedReason || 'تم إيقاف صلاحية الاستعلامات وفحص التعارضات لهذه العيادة من قِبل المشرف العام (Super Admin).'}
+                  </p>
+                </div>
+                <div className="p-3 bg-red-50 border border-red-200 rounded-2xl text-[11px] text-red-800 font-mono font-bold">
+                  الحالة: AI Blocked by Super Admin
+                </div>
+                <p className="text-[11px] text-slate-400 max-w-xs">
+                  يرجى مراجعة إدارة المنظومة لترقية الباقة أو إلغاء الحظر الإداري للاستعلامات السريرية.
+                </p>
+              </div>
+            ) : messages.length === 0 ? (
               <div className="h-full flex flex-col justify-center text-center p-2">
-                <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-blue-100/80 text-blue-600 flex items-center justify-center shadow-xs border border-blue-200/60">
+                <div className="w-14 h-14 mx-auto mb-3 rounded-2xl flex items-center justify-center shadow-xs border bg-blue-100/80 text-blue-600 border-blue-200/60">
                   <HeartPulse size={28} className="text-blue-600 animate-pulse" />
                 </div>
                 <h4 className="font-bold text-slate-800 text-base mb-1">
@@ -260,7 +305,7 @@ export default function GeminiChat({patientContext, externalOpenTrigger}: Props)
                     <button
                       key={idx}
                       onClick={() => handleSendMessage(prompt)}
-                      className="w-full text-right text-xs bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50/70 p-3 rounded-2xl text-slate-700 transition-all duration-150 flex items-center justify-between group shadow-xs active:scale-99"
+                      className="w-full text-right text-xs p-3 rounded-2xl transition-all duration-150 flex items-center justify-between group shadow-xs bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50/70 text-slate-700 active:scale-99"
                     >
                       <span className="truncate pl-2 leading-relaxed font-medium">{prompt}</span>
                       <Send size={13} className="text-slate-400 group-hover:text-blue-600 shrink-0 transform -scale-x-100" />
@@ -330,28 +375,35 @@ export default function GeminiChat({patientContext, externalOpenTrigger}: Props)
 
           {/* Input Footer */}
           <div className="p-3 bg-white border-t border-slate-200" dir="rtl">
-            <div className="flex items-center gap-2">
-              <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                disabled={loading}
-                className="flex-1 px-3.5 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all disabled:opacity-60 text-right"
-                placeholder={patientContext?.name ? `اسأل عن علاج أو خطة ${patientContext.name}...` : "اسأل عن إرشادات علاج القلب، الجرعات، والتعارضات..."}
-              />
-              <button
-                onClick={() => handleSendMessage()}
-                disabled={!input.trim() || loading}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-40 text-white p-2.5 rounded-xl shadow-xs transition-all active:scale-95 flex items-center justify-center shrink-0"
-                title="إرسال السؤال"
-              >
-                <Send size={16} className="transform -scale-x-100" />
-              </button>
-            </div>
+            {isAiBlocked ? (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-center">
+                <p className="text-xs font-bold text-red-800">خدمة الذكاء الاصطناعي موقوفة حالياً للعيادة</p>
+                <p className="text-[11px] text-red-600 mt-0.5">تم الحظر من قِبل المشرف العام أو انتهاء باقة الاستعلامات الشهرية.</p>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  disabled={loading}
+                  className="flex-1 px-3.5 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all disabled:opacity-60 text-right"
+                  placeholder={patientContext?.name ? `اسأل عن علاج أو خطة ${patientContext.name}...` : "اسأل عن إرشادات علاج القلب، الجرعات، والتعارضات..."}
+                />
+                <button
+                  onClick={() => handleSendMessage()}
+                  disabled={!input.trim() || loading}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-40 text-white p-2.5 rounded-xl shadow-xs transition-all active:scale-95 flex items-center justify-center shrink-0"
+                  title="إرسال السؤال"
+                >
+                  <Send size={16} className="transform -scale-x-100" />
+                </button>
+              </div>
+            )}
             <p className="text-[10px] text-slate-400 text-center mt-2">
-              مساعد طبيب القلب الذكي • داعم للقرار السريري وفق أحدث المعايير الطبية
+              {isAiBlocked ? 'الحظر مفعل من إدارة المنظومة (Super Admin Governance)' : 'مساعد طبيب القلب الذكي • داعم للقرار السريري وفق أحدث المعايير الطبية'}
             </p>
           </div>
         </div>
@@ -364,11 +416,13 @@ export default function GeminiChat({patientContext, externalOpenTrigger}: Props)
           className={`flex items-center gap-2.5 px-4.5 py-3.5 rounded-full shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 text-white ${
             isOpen
               ? 'bg-slate-900 hover:bg-black ring-4 ring-slate-300/50'
-              : patientContext?.name
+              : isAiBlocked
+                ? 'bg-gradient-to-r from-red-600 to-rose-700 ring-4 ring-red-400/40 shadow-red-500/30'
+                : patientContext?.name
                 ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-700 hover:from-emerald-700 hover:to-blue-800 ring-4 ring-emerald-400/40 shadow-emerald-500/30'
                 : 'bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 ring-4 ring-blue-400/30 shadow-blue-500/30'
           }`}
-          title={isOpen ? 'إغلاق مساعد الذكاء الاصطناعي' : 'فتح مساعد القلب الذكي'}
+          title={isOpen ? 'إغلاق مساعد الذكاء الاصطناعي' : isAiBlocked ? 'مساعد الذكاء الاصطناعي (موقف)' : 'فتح مساعد القلب الذكي'}
           aria-label="Cardiology AI Assistant"
         >
           {isOpen ? (
@@ -379,11 +433,21 @@ export default function GeminiChat({patientContext, externalOpenTrigger}: Props)
           ) : (
             <>
               <div className="relative">
-                <Sparkles size={20} className="text-amber-300 animate-pulse" />
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-blue-600 animate-ping" />
+                {isAiBlocked ? (
+                  <Lock size={18} className="text-white" />
+                ) : (
+                  <Sparkles size={20} className="text-amber-300 animate-pulse" />
+                )}
+                <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${
+                  isAiBlocked ? 'bg-amber-300 ring-2 ring-red-700' : 'bg-emerald-400 ring-2 ring-blue-600 animate-ping'
+                }`} />
               </div>
               <span className="text-xs font-bold tracking-wide">
-                {patientContext?.name ? `AI: ${patientContext.name}` : 'مساعد القلب الذكي (AI)'}
+                {isAiBlocked
+                  ? 'الـ AI موقف إدارياً'
+                  : patientContext?.name
+                  ? `AI: ${patientContext.name}`
+                  : 'مساعد القلب الذكي (AI)'}
               </span>
             </>
           )}

@@ -26,6 +26,8 @@ import {generatePatientToken} from '../lib/patientAuth';
 interface NewPatientModalProps {
   onClose: () => void;
   onPatientAdded?: (patientId: string) => void;
+  doctorId?: string;
+  clinicCode?: string;
 }
 
 const COMMON_CARDIAC_DIAGNOSES = [
@@ -47,7 +49,12 @@ const COMMON_DRUGS_PRESETS = [
   {name: 'Furosemide (Lasix)', defaultDosage: '40 mg', slot: 'Morning', inst: 'حبة صباحاً على الريق'}
 ];
 
-export default function NewPatientModal({onClose, onPatientAdded}: NewPatientModalProps) {
+export default function NewPatientModal({
+  onClose,
+  onPatientAdded,
+  doctorId = 'doc-1',
+  clinicCode = 'CLINIC-AMMAR-101'
+}: NewPatientModalProps) {
   const [activeStep, setActiveStep] = useState<'profile' | 'clinical' | 'vitals_meds' | 'success'>('profile');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +139,8 @@ export default function NewPatientModal({onClose, onPatientAdded}: NewPatientMod
 
       const patientDocData = {
         id: newPatientId,
+        doctorId: doctorId || 'doc-1',
+        clinicCode: clinicCode || 'CLINIC-AMMAR-101',
         name: name.trim(),
         nameEn: nameEn.trim() || name.trim(),
         gender,

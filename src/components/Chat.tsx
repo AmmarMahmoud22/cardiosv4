@@ -10,13 +10,19 @@ export default function Chat({patientId, patientName}: {patientId: string; patie
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
+    // Avoid composite index error by filtering by patientId and sorting in-memory
     const q = query(
       collection(db, 'messages'),
-      where('patientId', '==', patientId),
-      orderBy('timestamp', 'asc')
+      where('patientId', '==', patientId)
     );
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({id: doc.id, ...doc.data()})));
+      const msgs = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+      msgs.sort((a: any, b: any) => {
+        const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        return timeA - timeB;
+      });
+      setMessages(msgs);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'messages');
     });

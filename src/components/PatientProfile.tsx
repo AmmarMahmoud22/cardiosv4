@@ -19,7 +19,10 @@ import {
   Plus,
   Trash2,
   Stethoscope,
-  Info
+  Info,
+  Lock,
+  ShieldAlert,
+  Calculator
 } from 'lucide-react';
 import LabResultsModal from './LabResultsModal';
 import CardiologyReport from './CardiologyReport';
@@ -28,6 +31,8 @@ import Chat from './Chat';
 import ReferralModal from './ReferralModal';
 import BillingModal from './BillingModal';
 import PatientQRCardModal from './PatientQRCardModal';
+import ClinicalCalculatorsModal from './ClinicalCalculatorsModal';
+import { useLanguage, LanguageSwitcher } from '../context/LanguageContext';
 
 const CLINIC_HOTLINE = '01146963589';
 
@@ -45,7 +50,18 @@ const COMMON_CARDIOLOGY_MEDS = [
   {name: 'Clopidogrel (Plavix)', dose: '75 mg', timing: 'يومياً'}
 ];
 
-export default function PatientProfile({patientId, onBack}: {patientId: string, onBack: () => void}) {
+export default function PatientProfile({
+  patientId,
+  onBack,
+  isAiBlocked = false,
+  aiBlockedReason
+}: {
+  patientId: string;
+  onBack: () => void;
+  isAiBlocked?: boolean;
+  aiBlockedReason?: string;
+}) {
+  const { language, direction, isRTL, t } = useLanguage();
   const [patient, setPatient] = useState<any>(null);
   const [medications, setMedications] = useState<{name: string, dosage: string, instructions?: string}[]>([]);
   const [vitals, setVitals] = useState<{timestamp: string, systolic: number, diastolic: number, heartRate?: number}[]>([]);
@@ -65,6 +81,7 @@ export default function PatientProfile({patientId, onBack}: {patientId: string, 
   const [showReferralModal, setShowReferralModal] = useState(false);
   const [showBillingModal, setShowBillingModal] = useState(false);
   const [showQRCard, setShowQRCard] = useState(false);
+  const [showCalcModal, setShowCalcModal] = useState(false);
   const [aiTrigger, setAiTrigger] = useState(0);
 
   // Load Patient Document
@@ -174,49 +191,63 @@ export default function PatientProfile({patientId, onBack}: {patientId: string, 
   const isHighBP = latestVital && (latestVital.systolic >= 140 || latestVital.diastolic >= 90);
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto font-sans" dir="rtl">
+    <div className="p-4 sm:p-6 space-y-6 max-w-7xl mx-auto font-sans" dir={direction}>
       {/* Top Clinical Header & Actions */}
       <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
           <div className="flex items-center gap-3">
             <button
               onClick={onBack}
-              className="p-2 bg-slate-100 hover:bg-slate-200 rounded-2xl text-slate-700 transition-colors"
-              title="العودة للوحة الرئيسية"
+              className="p-2 bg-slate-100 hover:bg-slate-200 rounded-2xl text-slate-700 transition-colors cursor-pointer"
+              title={t('backToDashboard')}
             >
-              <ArrowLeft size={18} className="transform -scale-x-100" />
+              <ArrowLeft size={18} className={isRTL ? 'transform -scale-x-100' : ''} />
             </button>
             <div>
               <div className="flex items-center gap-2.5">
-                <h1 className="text-xl sm:text-2xl font-black text-slate-900">{patient.name}</h1>
+                <h1 className="text-xl sm:text-2xl font-black text-slate-900">
+                  {(language === 'en' && patient.nameEn) ? patient.nameEn : patient.name}
+                </h1>
                 <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full ${
                   patient.status?.includes('تنبيه') || patient.status?.includes('Alert')
                     ? 'bg-red-100 text-red-800 border border-red-200'
                     : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                 }`}>
-                  {patient.status || 'نشط'}
+                  {patient.status || t('active')}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-1 flex items-center gap-3">
-                <span>تاريخ الميلاد: {patient.dob} ({patient.age || 50} سنة)</span>
-                <span>• الهاتف: {patient.phone || '01012345678'}</span>
-                <span>• خط العيادة: <strong className="text-blue-600 font-mono">{CLINIC_HOTLINE}</strong></span>
+                <span>{isRTL ? `تاريخ الميلاد: ${patient.dob} (${patient.age || 50} سنة)` : `DOB: ${patient.dob} (${patient.age || 50} yo)`}</span>
+                <span>• {t('phone')}: {patient.phone || '01012345678'}</span>
+                <span>• {isRTL ? 'خط العيادة:' : 'Clinic Hotline:'} <strong className="text-blue-600 font-mono">{CLINIC_HOTLINE}</strong></span>
               </p>
             </div>
           </div>
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2.5">
+            <LanguageSwitcher />
+
             {/* AI Assistant Direct Trigger */}
             <button
               onClick={() => setAiTrigger(prev => prev + 1)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-700 hover:from-emerald-700 hover:to-blue-800 text-white rounded-2xl shadow-sm text-xs font-bold transition-all active:scale-95"
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl shadow-sm text-xs font-bold transition-all active:scale-95 cursor-pointer ${
+                isAiBlocked
+                  ? 'bg-red-900/80 hover:bg-red-900 text-red-200 border border-red-500/50'
+                  : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-700 hover:from-emerald-700 hover:to-blue-800 text-white'
+              }`}
             >
-              <Sparkles size={16} className="text-amber-300 animate-pulse" />
-              <span>مستشار الذكاء الاصطناعي للحالة (Cardio AI)</span>
-              <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded-md text-emerald-100">
-                ملم بالحالة
-              </span>
+              <Sparkles size={16} className={isAiBlocked ? 'text-red-300' : 'text-amber-300 animate-pulse'} />
+              <span>{isAiBlocked ? (isRTL ? 'مستشار الذكاء الاصطناعي (مغلق إدارياً)' : 'Cardio AI (Blocked)') : (isRTL ? 'مستشار الذكاء الاصطناعي للحالة (Cardio AI)' : 'Cardio AI Case Assistant')}</span>
+            </button>
+
+            {/* Clinical Calculators Button */}
+            <button
+              onClick={() => setShowCalcModal(true)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-2xl shadow-xs text-xs font-bold transition-all active:scale-95 cursor-pointer"
+            >
+              <Calculator size={16} className="text-blue-600" />
+              <span>{t('clinicalCalculators')}</span>
             </button>
 
             {/* Smart QR Card */}
@@ -264,6 +295,29 @@ export default function PatientProfile({patientId, onBack}: {patientId: string, 
           </div>
         </div>
       </div>
+
+      {/* AI Blocked Governance Warning Banner in Patient File */}
+      {isAiBlocked && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-3xl p-4 sm:p-5 shadow-xs flex items-center justify-between gap-3 text-red-900 animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0 border border-red-200 shadow-xs">
+              <ShieldAlert size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-black text-red-950">خدمة الذكاء الاصطناعي موقوفة للعيادة</h3>
+                <span className="text-[10px] bg-red-200 text-red-800 font-mono font-bold px-2 py-0.5 rounded-full">AI Blocked</span>
+              </div>
+              <p className="text-xs text-red-700 mt-0.5 leading-relaxed">
+                {aiBlockedReason || 'تم إيقاف صلاحية الاستعلامات الذكية وفحص التعارضات لهذه العيادة من قِبل المشرف العام (Super Admin).'}
+              </p>
+            </div>
+          </div>
+          <span className="text-xs bg-red-600 text-white font-bold px-3 py-1.5 rounded-xl shrink-0">
+            مغلق إدارياً
+          </span>
+        </div>
+      )}
 
       {showLabModal && <LabResultsModal patientId={patientId} onClose={() => setShowLabModal(false)} />}
 
@@ -437,11 +491,23 @@ export default function PatientProfile({patientId, onBack}: {patientId: string, 
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setAiTrigger(prev => prev + 1)}
-                className="flex items-center gap-1.5 px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-xl text-xs font-bold border border-purple-200 transition-colors"
+                onClick={() => {
+                  if (isAiBlocked) {
+                    alert('⚠️ عذراً، خدمة فحص التعارضات بالذكاء الاصطناعي موقوفة لهذه العيادة من قِبل المشرف العام (Super Admin).');
+                    return;
+                  }
+                  setAiTrigger(prev => prev + 1);
+                }}
+                disabled={isAiBlocked}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
+                  isAiBlocked
+                    ? 'bg-red-50 text-red-700 border-red-200 cursor-not-allowed opacity-75'
+                    : 'bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200'
+                }`}
+                title={isAiBlocked ? 'الذكاء الاصطناعي موقوف إدارياً' : 'فحص التعارضات بالذكاء الاصطناعي'}
               >
-                <Sparkles size={14} className="text-purple-600" />
-                <span>فحص التعارضات بالذكاء الاصطناعي</span>
+                {isAiBlocked ? <Lock size={14} className="text-red-500" /> : <Sparkles size={14} className="text-purple-600" />}
+                <span>{isAiBlocked ? 'فحص التعارضات (الـ AI موقف إدارياً)' : 'فحص التعارضات بالذكاء الاصطناعي'}</span>
               </button>
               <button
                 onClick={() => window.print()}
@@ -628,6 +694,8 @@ export default function PatientProfile({patientId, onBack}: {patientId: string, 
           echo: patient.echo
         }}
         externalOpenTrigger={aiTrigger}
+        isAiBlocked={isAiBlocked}
+        aiBlockedReason={aiBlockedReason}
       />
 
       {showReferralModal && <ReferralModal patientId={patientId} onClose={() => setShowReferralModal(false)} />}
@@ -637,6 +705,16 @@ export default function PatientProfile({patientId, onBack}: {patientId: string, 
           patientName={patient.name}
           patientId={patient.id || patientId}
           onClose={() => setShowQRCard(false)}
+        />
+      )}
+
+      {showCalcModal && (
+        <ClinicalCalculatorsModal
+          patientName={patient.name}
+          patientAge={patient.age || 52}
+          gender={patient.gender === 'female' ? 'female' : 'male'}
+          systolicBp={latestVital?.systolic || 140}
+          onClose={() => setShowCalcModal(false)}
         />
       )}
     </div>

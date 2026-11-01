@@ -1,13 +1,18 @@
 import express from 'express';
 import {GoogleGenAI} from '@google/genai';
 import dotenv from 'dotenv';
+import path from 'path';
+import {fileURLToPath} from 'url';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
 
-const apiKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
 const ai = new GoogleGenAI({
   apiKey: apiKey,
   httpOptions: {
@@ -59,35 +64,38 @@ function generateCardiologyFallback(message: string, patientContext?: any): stri
 }
 
 app.post('/api/consult-ai', async (req, res) => {
-    const {vitals, patientName} = req.body;
-    const prompt = `Patient: ${patientName}. Vitals: ${JSON.stringify(vitals)}. Provide cardiology clinical advice regarding hypertension management based on these vitals.`;
-    
-    try {
-        if (!apiKey) {
-          throw new Error('No API key provided');
-        }
-        const response = await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents: prompt,
-            config: {
-              systemInstruction: "You are an expert Cardiology Clinical Assistant. Provide concise, actionable hypertension management guidance."
-            }
-        });
-        res.json({advice: response.text});
-    } catch (e) {
-        console.warn('Consult AI fallback:', e);
-        res.json({advice: generateCardiologyFallback('vitals', {name: patientName, vitals})});
+  const {vitals, patientName} = req.body;
+  const prompt = `Patient: ${patientName}. Vitals: ${JSON.stringify(vitals)}. Provide cardiology clinical advice regarding hypertension management based on these vitals.`;
+  
+  try {
+    if (!apiKey) {
+      throw new Error('No API key provided');
     }
+    const response = await Promise.race([
+      ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          systemInstruction: "You are an expert Cardiology Clinical Assistant. Provide concise, actionable hypertension management guidance."
+        }
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 4000))
+    ]) as any;
+    res.json({advice: response.text});
+  } catch (e) {
+    console.warn('Consult AI fallback:', e);
+    res.json({advice: generateCardiologyFallback('vitals', {name: patientName, vitals})});
+  }
 });
 
 app.post('/api/chat', async (req, res) => {
-    const {history, message, patientContext} = req.body;
-    try {
-        const contents = Array.isArray(history) && history.length > 0
-          ? [...history, { role: 'user', parts: [{ text: message }] }]
-          : [{ role: 'user', parts: [{ text: message }] }];
+  const {history, message, patientContext} = req.body;
+  try {
+    const contents = Array.isArray(history) && history.length > 0
+      ? [...history, { role: 'user', parts: [{ text: message }] }]
+      : [{ role: 'user', parts: [{ text: message }] }];
 
-        let systemInstruction = `You are "Cardios AI Assistant", a world-class Cardiology Clinical Assistant embedded in a Cardiology Practice EHR in Egypt.
+    let systemInstruction = `You are "Cardios AI Assistant", a world-class Cardiology Clinical Assistant embedded in a Cardiology Practice EHR in Egypt.
 You assist cardiologists and clinicians with:
 - Clinical practice guidelines: ESC (European Society of Cardiology), AHA/ACC (American College of Cardiology / American Heart Association), and Egyptian Society of Cardiology protocols.
 - Cardiovascular pharmacotherapy: Statins, ACE inhibitors, ARBs, ARNIs (Sacubitril/Valsartan), Beta-blockers, Calcium Channel Blockers, SGLT2 inhibitors, MRAs (Spironolactone/Eplerenone), Antiplatelets (Aspirin, Clopidogrel, Ticagrelor), DOACs (Apixaban, Rivaroxaban, Dabigatran), and Antiarrhythmics.
@@ -99,8 +107,8 @@ RESPONSE FORMAT:
 - Respond in the language used by the physician (Arabic or English). Arabic cardiology clinical communication should use clear, dignified medical terminology with standard drug brand and generic names.
 - Keep responses concise, organized in bullet points, and directly applicable at the point of care.`;
 
-        if (patientContext && patientContext.name) {
-          systemInstruction += `\n\n======================================================
+    if (patientContext && patientContext.name) {
+      systemInstruction += `\n\n======================================================
 ACTIVE PATIENT CLINICAL DOSSIER (CURRENTLY VIEWED BY THE DOCTOR):
 - Patient Name: ${patientContext.name}
 - Patient ID: ${patientContext.id || 'N/A'}
@@ -119,27 +127,59 @@ The physician is actively consulting you on THIS EXACT PATIENT (${patientContext
 You already possess their complete vital history, active medications, and cardiology background.
 DO NOT ask the doctor to provide the patient's vitals, name, or medications again.
 Reference their actual recorded numbers, blood pressure stage, and current prescription drugs directly in your evaluation.`;
-        }
-
-        if (!apiKey) {
-          // Provide intelligent instant fallback if no API key is available
-          const fallback = generateCardiologyFallback(message, patientContext);
-          return res.json({response: fallback});
-        }
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents: contents,
-            config: {
-                systemInstruction: systemInstruction
-            }
-        });
-        res.json({response: response.text});
-    } catch (e) {
-        console.warn('Chat using clinical fallback due to:', e);
-        const fallback = generateCardiologyFallback(message, patientContext);
-        res.json({response: fallback});
     }
+
+    if (!apiKey) {
+      const fallback = generateCardiologyFallback(message, patientContext);
+      return res.json({response: fallback});
+    }
+
+    const response = await Promise.race([
+      ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: contents,
+        config: {
+          systemInstruction: systemInstruction
+        }
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 4000))
+    ]) as any;
+    res.json({response: response.text});
+  } catch (e) {
+    console.warn('Chat using clinical fallback due to:', e);
+    const fallback = generateCardiologyFallback(message, patientContext);
+    res.json({response: fallback});
+  }
 });
 
-app.listen(3001, () => console.log('Server running on 3001'));
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    const { createServer } = await import('vite');
+    const vite = await createServer({
+      server: { 
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true'
+      },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else if (!process.env.VERCEL) {
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    });
+  }
+
+  if (!process.env.VERCEL) {
+    const PORT = Number(process.env.PORT) || 3000;
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server listening on http://0.0.0.0:${PORT}`);
+    });
+  }
+}
+
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
