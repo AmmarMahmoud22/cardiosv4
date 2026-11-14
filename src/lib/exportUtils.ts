@@ -152,7 +152,7 @@ export function openAdminPrintableReport(data: {
 }) {
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
-    alert(data.language === 'en' ? 'Please allow popups to open the admin report' : 'يرجى السماح بالنوافذ المنبثقة لفتح تقرير الإدارة');
+    console.warn(data.language === 'en' ? 'Popup blocked while opening admin report' : 'يرجى السماح بالنوافذ المنبثقة لفتح تقرير الإدارة');
     return;
   }
 

@@ -10,6 +10,18 @@ import { db } from '../lib/firebase';
 import { Plan, DoctorWithSubscription, LabWithStats } from '../types/subscription';
 import { SEED_PLANS, SEED_DOCTORS, SEED_LABS } from '../lib/seed';
 import {
+  deleteDoctorEverywhere,
+  deleteLabEverywhere,
+  getLocalDeletedIds,
+  getLocalSeedFlags,
+  getSeedFlags,
+  markSeedFlags,
+  reconcileOrphanedSeedsWithSystemUsers,
+  syncStatusToSystemUser,
+  updateLocalPendingDoctorStatus,
+  updateLocalPendingLabStatus
+} from '../lib/adminSync';
+import {
   ShieldAlert,
   ShieldCheck,
   Lock,
@@ -71,6 +83,8 @@ import {
 import { useLanguage, LanguageSwitcher } from '../context/LanguageContext';
 import PlatformRevenueDashboard from './PlatformRevenueDashboard';
 import SystemActivityLog from './SystemActivityLog';
+import UserManagement from './UserManagement';
+import AIKnowledgeBaseManager from './AIKnowledgeBaseManager';
 
 interface SuperAdminPortalProps {
   onBack: () => void;
@@ -86,8 +100,8 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   const [adminPin, setAdminPin] = useState<string>('');
   const [pinError, setPinError] = useState<string>('');
 
-  // Navigation Tabs: overview, revenue, finance, activity, doctors, plans, ai, labs
-  const [activeTab, setActiveTab] = useState<'overview' | 'revenue' | 'finance' | 'activity' | 'doctors' | 'plans' | 'ai' | 'labs'>('overview');
+  // Navigation Tabs: overview, revenue, activity, users, finance, doctors, plans, ai, labs
+  const [activeTab, setActiveTab] = useState<'overview' | 'revenue' | 'activity' | 'users' | 'finance' | 'doctors' | 'plans' | 'ai' | 'labs'>('overview');
 
   // Platform Analytics State
   const [analyticsMetrics, setAnalyticsMetrics] = useState<AnalyticsMetrics>(getLocalMetrics);
@@ -168,31 +182,32 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
     status: 'active'
   });
 
+  // Delete confirmation target for Doctors & Labs
+  const [deleteTargetEntity, setDeleteTargetEntity] = useState<
+    | { type: 'doctor'; item: DoctorWithSubscription }
+    | { type: 'lab'; item: LabWithStats }
+    | null
+  >(null);
+
   // Success Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [confirmResetQuotas, setConfirmResetQuotas] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // PIN verification
+  // PIN / Password verification for Admin Portal
   const handleVerifyPin = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (adminPin === '7777' || adminPin === 'admin2026' || adminPin === '') {
+    if (adminPin.trim() === '207812') {
       setIsAuthenticated(true);
       sessionStorage.setItem('cardios_superadmin_auth', 'true');
       setPinError('');
     } else {
-      setPinError('رمز المرور غير صحيح. انقر على زر الدخول السريع للتجربة');
+      setPinError('كلمة السر غير صحيحة. يرجى التأكد من كتابة كلمة السر الخاصة بك.');
     }
-  };
-
-  const handleQuickDemoAccess = () => {
-    setAdminPin('7777');
-    setIsAuthenticated(true);
-    sessionStorage.setItem('cardios_superadmin_auth', 'true');
-    setPinError('');
   };
 
   const handleAdminLogout = () => {
@@ -205,6 +220,10 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
     if (!isAuthenticated) return;
 
     setLoading(true);
+    let cancelled = false;
+
+    // Reconcile any seed doctors/labs already deleted from User Management
+    reconcileOrphanedSeedsWithSystemUsers().catch(console.warn);
 
     const unsubPlans = onSnapshot(collection(db, 'plans'), (snap) => {
       if (!snap.empty) {
@@ -224,10 +243,12 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
       setPlans(SEED_PLANS);
     });
 
-    const unsubDoctors = onSnapshot(collection(db, 'doctors'), (snap) => {
+    const unsubDoctors = onSnapshot(collection(db, 'doctors'), async (snap) => {
+      const deletedSet = new Set(getLocalDeletedIds());
       let loadedDocs: DoctorWithSubscription[] = [];
       if (!snap.empty) {
         snap.forEach((docSnap) => {
+          if (deletedSet.has(docSnap.id)) return;
           const data = docSnap.data() as any;
           loadedDocs.push({
             id: docSnap.id,
@@ -254,19 +275,24 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
           });
         });
       } else {
-        const enrichedSeed = SEED_DOCTORS.map(d => ({
-          ...d,
-          medicalLicenseNumber: d.id === 'doc-1' ? 'EGY-MED-49102' : d.id === 'doc-2' ? 'EGY-MED-38291' : 'EGY-MED-55019',
-          verificationStatus: d.status === 'active' ? ('verified' as const) : ('pending' as const),
-          prescriptionsIssued: d.id === 'doc-1' ? 42 : d.id === 'doc-2' ? 18 : 0,
-          echoReportsCount: d.id === 'doc-1' ? 19 : d.id === 'doc-2' ? 7 : 0,
-          patientCount: d.id === 'doc-1' ? 3 : d.id === 'doc-2' ? 2 : 0,
-          lastActiveAt: 'اليوم، 11:30 ص'
-        }));
-        loadedDocs = [...enrichedSeed as any];
-        enrichedSeed.forEach(d => {
-          setDoc(doc(db, 'doctors', d.id), d, { merge: true }).catch(console.warn);
-        });
+        const flags = await getSeedFlags();
+        flags.deletedIds.forEach((id) => deletedSet.add(id));
+        if (!flags.doctorsSeeded) {
+          const enrichedSeed = SEED_DOCTORS.filter((d) => !deletedSet.has(d.id)).map(d => ({
+            ...d,
+            medicalLicenseNumber: d.id === 'doc-1' ? 'EGY-MED-49102' : d.id === 'doc-2' ? 'EGY-MED-38291' : 'EGY-MED-55019',
+            verificationStatus: d.status === 'active' ? ('verified' as const) : ('pending' as const),
+            prescriptionsIssued: d.id === 'doc-1' ? 42 : d.id === 'doc-2' ? 18 : 0,
+            echoReportsCount: d.id === 'doc-1' ? 19 : d.id === 'doc-2' ? 7 : 0,
+            patientCount: d.id === 'doc-1' ? 3 : d.id === 'doc-2' ? 2 : 0,
+            lastActiveAt: 'اليوم، 11:30 ص'
+          }));
+          loadedDocs = [...enrichedSeed as any];
+          await markSeedFlags({ doctorsSeeded: true });
+          enrichedSeed.forEach(d => {
+            setDoc(doc(db, 'doctors', d.id), d, { merge: true }).catch(console.warn);
+          });
+        }
       }
 
       try {
@@ -274,6 +300,7 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
         if (rawLocal) {
           const localList: DoctorWithSubscription[] = JSON.parse(rawLocal);
           for (const item of localList) {
+            if (deletedSet.has(item.id)) continue;
             const idx = loadedDocs.findIndex(d => d.id === item.id || d.clinicCode === item.clinicCode);
             if (idx === -1) {
               loadedDocs.unshift({
@@ -285,8 +312,6 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                 patientCount: 0,
                 lastActiveAt: 'مسجل حديثاً'
               });
-            } else if (item.status) {
-              loadedDocs[idx].status = item.status;
             }
           }
         }
@@ -294,18 +319,28 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
         console.warn('Error reading local pending docs:', e);
       }
 
-      setDoctors(loadedDocs);
-      setLoading(false);
+      if (!cancelled) {
+        setDoctors(loadedDocs);
+        setLoading(false);
+      }
     }, (err) => {
       console.warn('Error reading doctors:', err);
-      setDoctors(SEED_DOCTORS as any);
+      const localFlags = getLocalSeedFlags();
+      if (localFlags.doctorsSeeded) {
+        setDoctors([]);
+      } else {
+        const delSet = new Set(getLocalDeletedIds());
+        setDoctors((SEED_DOCTORS as any).filter((d: any) => !delSet.has(d.id)));
+      }
       setLoading(false);
     });
 
-    const unsubLabs = onSnapshot(collection(db, 'labs'), (snap) => {
+    const unsubLabs = onSnapshot(collection(db, 'labs'), async (snap) => {
+      const deletedSet = new Set(getLocalDeletedIds());
       let loadedLabs: LabWithStats[] = [];
       if (!snap.empty) {
         snap.forEach((docSnap) => {
+          if (deletedSet.has(docSnap.id)) return;
           const data = docSnap.data() as any;
           loadedLabs.push({
             id: docSnap.id,
@@ -317,14 +352,20 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
             accreditation: data.accreditation,
             linkedClinics: data.linkedClinics || [],
             status: data.status || 'active',
+            email: data.email,
             testsProcessed: data.testsProcessed || 12
           });
         });
       } else {
-        loadedLabs = [...SEED_LABS as any];
-        SEED_LABS.forEach(l => {
-          setDoc(doc(db, 'labs', l.id), l, { merge: true }).catch(console.warn);
-        });
+        const flags = await getSeedFlags();
+        flags.deletedIds.forEach((id) => deletedSet.add(id));
+        if (!flags.labsSeeded) {
+          loadedLabs = [...SEED_LABS.filter((l) => !deletedSet.has(l.id)) as any];
+          await markSeedFlags({ labsSeeded: true });
+          loadedLabs.forEach(l => {
+            setDoc(doc(db, 'labs', l.id), l, { merge: true }).catch(console.warn);
+          });
+        }
       }
 
       try {
@@ -332,11 +373,10 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
         if (rawLocalLabs) {
           const localList: LabWithStats[] = JSON.parse(rawLocalLabs);
           for (const item of localList) {
+            if (deletedSet.has(item.id)) continue;
             const idx = loadedLabs.findIndex(l => l.id === item.id || l.labCode === item.labCode);
             if (idx === -1) {
               loadedLabs.unshift(item);
-            } else if (item.status) {
-              loadedLabs[idx].status = item.status;
             }
           }
         }
@@ -344,10 +384,18 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
         console.warn('Error reading local pending labs:', e);
       }
 
-      setLabs(loadedLabs);
+      if (!cancelled) {
+        setLabs(loadedLabs);
+      }
     }, (err) => {
       console.warn('Error reading labs:', err);
-      setLabs(SEED_LABS as any);
+      const localFlags = getLocalSeedFlags();
+      if (localFlags.labsSeeded) {
+        setLabs([]);
+      } else {
+        const delSet = new Set(getLocalDeletedIds());
+        setLabs((SEED_LABS as any).filter((l: any) => !delSet.has(l.id)));
+      }
     });
 
     const unsubAnalytics = subscribeToAnalytics((data) => {
@@ -356,6 +404,7 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
     });
 
     return () => {
+      cancelled = true;
       unsubPlans();
       unsubDoctors();
       unsubLabs();
@@ -371,17 +420,20 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
     showToast(nextState ? 'تم تفعيل الذكاء الاصطناعي لكافة العيادات على المنصة' : '⚠️ تم تفعيل مفتاح الطوارئ وإيقاف AI مؤقتاً للمنصة');
   };
 
-  // Bulk reset monthly quotas
+  // Bulk reset monthly quotas (2-step inline confirm instead of window.confirm)
   const handleBulkResetQuotas = async () => {
-    if (!window.confirm('هل أنت متأكد من رغبتك في تصفير عداد استهلاك الذكاء الاصطناعي لجميع العيادات لشهر جديد؟')) {
+    if (!confirmResetQuotas) {
+      setConfirmResetQuotas(true);
+      setTimeout(() => setConfirmResetQuotas(false), 5000);
       return;
     }
+    setConfirmResetQuotas(false);
     try {
       const updated = doctors.map(d => ({ ...d, aiQueriesUsed: 0 }));
       setDoctors(updated);
-      for (const d of doctors) {
-        await setDoc(doc(db, 'doctors', d.id), { aiQueriesUsed: 0 }, { merge: true }).catch(() => {});
-      }
+      await Promise.all(
+        doctors.map((d) => setDoc(doc(db, 'doctors', d.id), { aiQueriesUsed: 0 }, { merge: true }).catch(() => {}))
+      );
       showToast('✓ تم تصفير عداد استهلاك الذكاء الاصطناعي لجميع العيادات بنجاح');
     } catch (err) {
       console.error('Error resetting quotas:', err);
@@ -410,10 +462,20 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   // Approve Doctor License
   const handleVerifyLicense = async (doctor: DoctorWithSubscription) => {
     try {
+      updateLocalPendingDoctorStatus(doctor.id, 'active', doctor.email);
       await setDoc(doc(db, 'doctors', doctor.id), {
         verificationStatus: 'verified',
         status: 'active'
       }, { merge: true });
+      await setDoc(doc(db, 'users', doctor.id), { status: 'active' }, { merge: true }).catch(() => {});
+      await syncStatusToSystemUser({
+        id: doctor.id,
+        name: doctor.name,
+        email: doctor.email,
+        role: 'Cardiologist',
+        isActive: true,
+        licenseNumber: doctor.medicalLicenseNumber
+      });
 
       setDoctors(prev => prev.map(d => d.id === doctor.id ? { ...d, verificationStatus: 'verified', status: 'active' } : d));
       showToast(`✓ تم اعتماد وتوثيق ترخيص د/ ${doctor.name} رسمياً`);
@@ -427,9 +489,17 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   const handleToggleDoctorStatus = async (doctor: DoctorWithSubscription) => {
     const newStatus = doctor.status === 'active' ? 'suspended' : 'active';
     try {
-      localStorage.setItem(`cardios_doctor_status_${doctor.id}`, newStatus);
+      updateLocalPendingDoctorStatus(doctor.id, newStatus, doctor.email);
       await setDoc(doc(db, 'doctors', doctor.id), { status: newStatus }, { merge: true });
       await setDoc(doc(db, 'users', doctor.id), { status: newStatus }, { merge: true }).catch(() => {});
+      await syncStatusToSystemUser({
+        id: doctor.id,
+        name: doctor.name,
+        email: doctor.email,
+        role: 'Cardiologist',
+        isActive: newStatus === 'active',
+        licenseNumber: doctor.medicalLicenseNumber
+      });
 
       setDoctors(prev => prev.map(d => d.id === doctor.id ? { ...d, status: newStatus } : d));
 
@@ -465,8 +535,17 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   const handleToggleLabStatus = async (lab: LabWithStats) => {
     const newStatus = lab.status === 'active' ? 'suspended' : 'active';
     try {
-      localStorage.setItem(`cardios_lab_status_${lab.id}`, newStatus);
+      updateLocalPendingLabStatus(lab.id, newStatus, lab.email);
       await setDoc(doc(db, 'labs', lab.id), { status: newStatus }, { merge: true });
+      await setDoc(doc(db, 'users', lab.id), { status: newStatus }, { merge: true }).catch(() => {});
+      await syncStatusToSystemUser({
+        id: lab.id,
+        name: lab.name,
+        email: lab.email,
+        role: 'Lab / Imaging Center',
+        isActive: newStatus === 'active',
+        facilityName: lab.branch
+      });
       setLabs(prev => prev.map(l => l.id === lab.id ? { ...l, status: newStatus } : l));
       showToast(`تم ${newStatus === 'active' ? 'تنشيط' : 'تجميد'} معمل (${lab.name})`);
       if (newStatus === 'active') {
@@ -474,6 +553,34 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
       }
     } catch (err) {
       console.error('Error updating lab status:', err);
+    }
+  };
+
+  const handleConfirmDeleteEntity = async () => {
+    if (!deleteTargetEntity) return;
+    const target = deleteTargetEntity;
+    setDeleteTargetEntity(null);
+
+    if (target.type === 'doctor') {
+      const docItem = target.item;
+      setDoctors(prev => prev.filter(d => d.id !== docItem.id));
+      await deleteDoctorEverywhere({
+        id: docItem.id,
+        email: docItem.email,
+        clinicCode: docItem.clinicCode,
+        name: docItem.name
+      });
+      showToast(`✓ تم حذف عيادة (${docItem.name}) ومزامنتها مع إدارة المستخدمين`);
+    } else {
+      const labItem = target.item;
+      setLabs(prev => prev.filter(l => l.id !== labItem.id));
+      await deleteLabEverywhere({
+        id: labItem.id,
+        email: labItem.email,
+        labCode: labItem.labCode,
+        name: labItem.name
+      });
+      showToast(`✓ تم حذف معمل (${labItem.name}) ومزامنته مع إدارة المستخدمين`);
     }
   };
 
@@ -508,7 +615,17 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
         status: doctorNewStatus
       };
 
+      updateLocalPendingDoctorStatus(selectedDoctor.id, doctorNewStatus, selectedDoctor.email);
       await setDoc(doc(db, 'doctors', selectedDoctor.id), updatedFields, { merge: true });
+      await setDoc(doc(db, 'users', selectedDoctor.id), { status: doctorNewStatus }, { merge: true }).catch(() => {});
+      await syncStatusToSystemUser({
+        id: selectedDoctor.id,
+        name: selectedDoctor.name,
+        email: selectedDoctor.email,
+        role: 'Cardiologist',
+        isActive: doctorNewStatus === 'active',
+        licenseNumber: doctorNewLicense
+      });
 
       setDoctors(prev => prev.map(d => d.id === selectedDoctor.id ? { ...d, ...updatedFields } : d));
       setDoctorModalOpen(false);
@@ -522,7 +639,7 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   const handleAddDoctorSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newDocForm.name || !newDocForm.clinicName) {
-      alert('يرجى كتابة اسم الطبيب واسم العيادة');
+      showToast('يرجى كتابة اسم الطبيب واسم العيادة');
       return;
     }
 
@@ -545,7 +662,7 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
       maxPatientsLimit: Number(newDocForm.maxPatientsLimit),
       isAiBlocked: false,
       phone: newDocForm.phone || '01000000000',
-      email: newDocForm.email || 'doctor@cardios.eg',
+      email: newDocForm.email || `${cCode.toLowerCase()}@cardios.eg`,
       medicalLicenseNumber: newDocForm.medicalLicenseNumber || `EGY-MED-${Date.now().toString().slice(-5)}`,
       verificationStatus: 'verified',
       patientCount: 0,
@@ -556,6 +673,17 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
 
     try {
       await setDoc(doc(db, 'doctors', newDocId), newDoctorObj, { merge: true });
+      await setDoc(doc(db, 'system_users', newDocId), {
+        id: newDocId,
+        name: newDoctorObj.name,
+        email: newDoctorObj.email || `${cCode.toLowerCase()}@cardios.eg`,
+        role: 'Cardiologist',
+        status: 'Active',
+        lastLogin: new Date().toLocaleDateString('en-US'),
+        licenseNumber: newDoctorObj.medicalLicenseNumber
+      }, { merge: true });
+      await markSeedFlags({ doctorsSeeded: true, systemUsersSeeded: true });
+
       setDoctors(prev => [newDoctorObj, ...prev]);
       setAddDoctorModalOpen(false);
       setNewDocForm({
@@ -651,15 +779,15 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
           <form onSubmit={handleVerifyPin} className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-2">
-                {isRTL ? 'رمز التحقق الخاص بالأدمن:' : 'Admin PIN Code:'}
+                {isRTL ? 'كلمة السر الخاصة بمدير النظام:' : 'Admin Password:'}
               </label>
               <div className="relative">
                 <input
                   type="password"
                   value={adminPin}
                   onChange={(e) => setAdminPin(e.target.value)}
-                  placeholder={isRTL ? 'أدخل الرمز (أو اضغط الدخول السريع)' : 'Enter PIN (or use Quick Demo Access)'}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-xs text-center font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/10 shadow-xs"
+                  placeholder="••••••••"
+                  className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-xs text-center font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/10 shadow-xs font-bold"
                 />
                 <KeyRound size={16} className={`absolute ${isRTL ? 'left-3' : 'right-3'} top-1/2 -translate-y-1/2 text-slate-400`} />
               </div>
@@ -673,17 +801,6 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
               <Lock size={15} />
               <span>{isRTL ? 'دخول لوحة الإدارة' : 'Access Admin Command Center'}</span>
             </button>
-
-            <div className="pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={handleQuickDemoAccess}
-                className="w-full py-2.5 bg-teal-50/80 hover:bg-teal-100/80 text-teal-800 border border-teal-200 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Zap size={15} className="text-amber-500" />
-                <span>{isRTL ? 'دخول تجريبي سريع بضغطة واحدة (Quick Admin Access)' : 'Quick Demo Access (1-Click Login)'}</span>
-              </button>
-            </div>
 
             <button
               type="button"
@@ -778,6 +895,7 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
         <div className="max-w-7xl mx-auto mt-3 flex items-center gap-2 overflow-x-auto pb-1">
           {[
             { id: 'overview', label: t('overviewTab'), icon: Activity },
+            { id: 'users', label: t('userManagementTab'), icon: ShieldCheck, badge: isRTL ? 'جديد' : 'New' },
             { id: 'revenue', label: isRTL ? 'عوائد المنصة (Recharts)' : 'Platform Revenue', icon: DollarSign, badge: isRTL ? 'جديد' : 'New' },
             { id: 'activity', label: isRTL ? `سجل النشاط الحي (${analyticsEvents.length})` : `System Activity (${analyticsEvents.length})`, icon: Radio, badge: isRTL ? 'مباشر' : 'Live' },
             { id: 'finance', label: `${t('financeTab')} (${totalEstimatedMRR} EGP)`, icon: Coins },
@@ -848,10 +966,14 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
 
             <button
               onClick={handleBulkResetQuotas}
-              className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer border ${
+                confirmResetQuotas
+                  ? 'bg-amber-500 text-white border-amber-600'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+              }`}
             >
-              <RefreshCw size={13} className="text-amber-500" />
-              <span>{t('resetQuotas')}</span>
+              <RefreshCw size={13} className={confirmResetQuotas ? 'text-white' : 'text-amber-500'} />
+              <span>{confirmResetQuotas ? (isRTL ? 'تأكيد التصفير الآن؟' : 'Confirm Reset?') : t('resetQuotas')}</span>
             </button>
 
             <button
@@ -1054,6 +1176,11 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
               <SystemActivityLog events={analyticsEvents} onClearLogs={resetAnalyticsData} />
             </div>
           </div>
+        )}
+
+        {/* ================= TAB: USER MANAGEMENT ================= */}
+        {activeTab === 'users' && (
+          <UserManagement />
         )}
 
         {/* ================= TAB: PLATFORM REVENUE (RECHARTS) ================= */}
@@ -1341,10 +1468,27 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                       >
                         {docItem.isAiBlocked ? 'إلغاء حظر AI' : 'حظر AI'}
                       </button>
+
+                      {/* Delete Doctor */}
+                      <button
+                        onClick={() => setDeleteTargetEntity({ type: 'doctor', item: docItem })}
+                        className="p-2 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-200 rounded-xl transition-all shadow-xs cursor-pointer"
+                        title="حذف العيادة نهائياً"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     </div>
                   </div>
                 );
               })}
+
+              {filteredDoctors.length === 0 && (
+                <div className="py-12 text-center bg-slate-50/70 rounded-2xl border border-dashed border-slate-200 text-slate-500">
+                  <Stethoscope className="w-9 h-9 mx-auto mb-2 text-slate-300" />
+                  <p className="text-sm font-bold text-slate-700">لا توجد عيادات أو أطباء مسجلين حالياً</p>
+                  <p className="text-xs text-slate-400 mt-1">يمكنك إضافة عيادة جديدة من زر &quot;{t('addDoctor')}&quot; أو من تبويب إدارة المستخدمين</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1491,6 +1635,9 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                 );
               })}
             </div>
+
+            {/* Admin AI Knowledge Base & Strict Cardiology RAG Manager */}
+            <AIKnowledgeBaseManager />
           </div>
         )}
 
@@ -1532,9 +1679,25 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                     >
                       {lab.status === 'active' ? 'تجميد المعمل' : 'قبول واعتماد ✓'}
                     </button>
+
+                    <button
+                      onClick={() => setDeleteTargetEntity({ type: 'lab', item: lab })}
+                      className="p-2 bg-white hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-slate-200 hover:border-rose-200 rounded-xl transition-all shadow-xs cursor-pointer"
+                      title="حذف المعمل نهائياً"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
               ))}
+
+              {labs.length === 0 && (
+                <div className="py-12 text-center bg-slate-50/70 rounded-2xl border border-dashed border-slate-200 text-slate-500">
+                  <FlaskConical className="w-9 h-9 mx-auto mb-2 text-slate-300" />
+                  <p className="text-sm font-bold text-slate-700">لا توجد معامل تحاليل مسجلة حالياً</p>
+                  <p className="text-xs text-slate-400 mt-1">يمكنك إضافة معمل جديد من تبويب إدارة المستخدمين</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1775,6 +1938,46 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: DELETE DOCTOR / LAB CONFIRMATION ================= */}
+      {deleteTargetEntity && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-md flex items-center justify-center p-4" dir={direction}>
+          <div className="bg-white/95 backdrop-blur-2xl border border-rose-200 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-[0_20px_60px_rgba(15,23,42,0.18)]">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <h3 className="text-base font-black text-slate-900">
+                {deleteTargetEntity.type === 'doctor' ? 'تأكيد حذف العيادة والطبيب' : 'تأكيد حذف المعمل الشريك'}
+              </h3>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              سيتم حذف هذا الحساب نهائياً من قاعدة البيانات ومن تبويب إدارة المستخدمين كذلك:
+              <strong className="block text-sm text-slate-900 mt-1.5">
+                {deleteTargetEntity.item.name}
+              </strong>
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeleteTargetEntity(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteEntity}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
+              >
+                تأكيد الحذف النهائي
+              </button>
+            </div>
           </div>
         </div>
       )}

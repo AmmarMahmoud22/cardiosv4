@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {
   X,
   Mail,
@@ -29,6 +29,7 @@ import {doc, setDoc, getDoc, collection, getDocs} from 'firebase/firestore';
 import {auth, db} from '../lib/firebase';
 import {verifyPatientAccess, generatePatientToken} from '../lib/patientAuth';
 import {trackDemoTrial, trackSignupAttempt} from '../lib/analytics';
+import {markSeedFlags} from '../lib/adminSync';
 
 export type UserRole = 'doctor' | 'lab' | 'patient';
 
@@ -81,22 +82,37 @@ export default function AuthModal({
     code: string;
   } | null>(null);
 
+  // Sync modal role & mode whenever opened
+  useEffect(() => {
+    if (isOpen) {
+      setSelectedRole(initialRole);
+      setMode(initialMode);
+      setError(null);
+      setSuccessMessage(null);
+      setSignupPendingInfo(null);
+    }
+  }, [isOpen, initialRole, initialMode]);
+
   if (!isOpen) return null;
 
-  // Patient direct file access (NO registration needed)
+  // Patient direct file access (with ID + Security Token)
   const handlePatientDirectAccess = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    const cleanId = patientIdInput.trim();
+    const cleanId = patientIdInput.trim().replace(/^#/, '');
     if (!cleanId) {
       setError('يرجى إدخال رقم الملف الطبي الخاص بك.');
+      return;
+    }
+    const cleanToken = patientTokenInput.trim();
+    if (!cleanToken) {
+      setError('يرجى إدخال رمز الأمان المطبوع على كارت المريض الخاص بك.');
       return;
     }
 
     setLoading(true);
     try {
-      const token = patientTokenInput.trim() || generatePatientToken(cleanId);
-      const res = await verifyPatientAccess(cleanId, token);
+      const res = await verifyPatientAccess(cleanId, cleanToken);
       if (res.valid) {
         trackDemoTrial('patient', `فتح ملف المريض #${cleanId} (${res.patientName || 'مريض'})`);
         setSuccessMessage(`أهلاً بك يا ${res.patientName || 'المريض'}! جاري فتح الملف الطبي...`);
@@ -107,8 +123,28 @@ export default function AuthModal({
       } else {
         setError(res.reason || 'رمز التحقق غير صحيح، يرجى مراجعة الكارت المسلم لك من العيادة.');
       }
-    } catch (err: any) {
+    } catch {
       setError('تعذر التحقق من الملف الطبي حالياً.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // One-click demo patient access (#1)
+  const handleDemoPatientAccess = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const demoId = '1';
+      const demoToken = generatePatientToken(demoId);
+      const res = await verifyPatientAccess(demoId, demoToken);
+      if (res.valid) {
+        trackDemoTrial('patient', `تجربة سريعة لكارت المريض #1`);
+        onSuccess('patient', demoId, res.patientName);
+        onClose();
+      } else {
+        setError(res.reason || 'تعذر فتح الملف التجريبي.');
+      }
     } finally {
       setLoading(false);
     }
@@ -164,6 +200,20 @@ export default function AuthModal({
 
       if (mode === 'signup') {
         let userId = '';
+        let usedFallbackAuth = false;
+
+        // Prevent duplicate emails in Firestore doctors/labs/system_users
+        const targetCol = selectedRole === 'doctor' ? 'doctors' : 'labs';
+        const existingSnap = await getDocs(collection(db, targetCol));
+        const dupDoc = existingSnap.docs.find(
+          (d) => d.data().email?.toLowerCase() === cleanEmail.toLowerCase()
+        );
+        if (dupDoc) {
+          setError('هذا البريد الإلكتروني مسجل بالفعل، يرجى التبديل لتبويب تسجيل الدخول.');
+          setLoading(false);
+          return;
+        }
+
         try {
           const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
           userId = cred.user.uid;
@@ -174,6 +224,7 @@ export default function AuthModal({
             setLoading(false);
             return;
           }
+          usedFallbackAuth = true;
           userId = `${selectedRole === 'doctor' ? 'doc' : 'lab'}-${Date.now().toString().slice(-6)}`;
         }
 
@@ -193,6 +244,8 @@ export default function AuthModal({
             email: cleanEmail,
             phone: phone.trim() || '01000000000',
             status: 'pending',
+            verificationStatus: 'pending',
+            medicalLicenseNumber: `EGY-MED-${randNum}9`,
             subscriptionExpiresAt: '2026-12-31',
             aiQueriesUsed: 0,
             aiQuotaLimit: 200,
@@ -200,15 +253,17 @@ export default function AuthModal({
             patientCount: 0,
             maxPatientsLimit: 50,
             planId: 'plan-starter',
-            planName: 'باقة العيادة الذكية',
+            planName: 'باقة العيادة الذكية (Cardio Starter)',
+            ...(usedFallbackAuth ? { password } : {}),
             createdAt: new Date().toISOString()
           };
 
           try {
             const rawPending = localStorage.getItem('cardios_local_pending_doctors');
             const list = rawPending ? JSON.parse(rawPending) : [];
-            list.push(docData);
-            localStorage.setItem('cardios_local_pending_doctors', JSON.stringify(list));
+            const filtered = Array.isArray(list) ? list.filter((i: any) => i.email?.toLowerCase() !== cleanEmail.toLowerCase()) : [];
+            filtered.push(docData);
+            localStorage.setItem('cardios_local_pending_doctors', JSON.stringify(filtered));
           } catch (e) {
             console.warn('LocalStorage notice:', e);
           }
@@ -224,6 +279,18 @@ export default function AuthModal({
             status: 'pending',
             createdAt: new Date().toISOString()
           }, {merge: true});
+          await setDoc(doc(db, 'system_users', userId), {
+            id: userId,
+            name: resolvedName,
+            email: cleanEmail,
+            role: 'Cardiologist',
+            status: 'Inactive',
+            lastLogin: new Date().toLocaleDateString('en-US'),
+            licenseNumber: docData.medicalLicenseNumber,
+            clinicCode: resolvedClinicCode,
+            ...(usedFallbackAuth ? { password } : {})
+          }, {merge: true});
+          await markSeedFlags({ doctorsSeeded: true, systemUsersSeeded: true });
 
           trackSignupAttempt('doctor', resolvedName, resolvedClinicCode);
 
@@ -239,8 +306,8 @@ export default function AuthModal({
           const randNum = Math.floor(10 + Math.random() * 90);
           resolvedLabCode = `LAB-${cleanName || 'MED'}-${randNum}`;
           resolvedTechnicianName = technicianNameInput.trim() || 'أخصائي التحاليل الطبية';
-          const defaultLinked = partnerClinicCodeInput.trim() 
-            ? [partnerClinicCodeInput.trim().toUpperCase()] 
+          const defaultLinked = partnerClinicCodeInput.trim()
+            ? [partnerClinicCodeInput.trim().toUpperCase()]
             : ['CLINIC-AMMAR-101', 'CLINIC-SHERIF-202'];
 
           const labData = {
@@ -255,14 +322,16 @@ export default function AuthModal({
             email: cleanEmail,
             status: 'pending',
             testsProcessed: 0,
+            ...(usedFallbackAuth ? { password } : {}),
             createdAt: new Date().toISOString()
           };
 
           try {
             const rawPending = localStorage.getItem('cardios_local_pending_labs');
             const list = rawPending ? JSON.parse(rawPending) : [];
-            list.push(labData);
-            localStorage.setItem('cardios_local_pending_labs', JSON.stringify(list));
+            const filtered = Array.isArray(list) ? list.filter((i: any) => i.email?.toLowerCase() !== cleanEmail.toLowerCase()) : [];
+            filtered.push(labData);
+            localStorage.setItem('cardios_local_pending_labs', JSON.stringify(filtered));
           } catch (e) {
             console.warn('LocalStorage notice:', e);
           }
@@ -280,6 +349,18 @@ export default function AuthModal({
             status: 'pending',
             createdAt: new Date().toISOString()
           }, {merge: true});
+          await setDoc(doc(db, 'system_users', userId), {
+            id: userId,
+            name: resolvedName,
+            email: cleanEmail,
+            role: 'Lab / Imaging Center',
+            status: 'Inactive',
+            lastLogin: new Date().toLocaleDateString('en-US'),
+            facilityName: labData.branch,
+            labCode: resolvedLabCode,
+            ...(usedFallbackAuth ? { password } : {})
+          }, {merge: true});
+          await markSeedFlags({ labsSeeded: true, systemUsersSeeded: true });
 
           trackSignupAttempt('lab', resolvedName, resolvedLabCode);
 
@@ -294,27 +375,73 @@ export default function AuthModal({
       } else {
         // Mode is Login
         let credUid = '';
+        const colName = selectedRole === 'doctor' ? 'doctors' : 'labs';
+        let handledProvisioned = false;
+
         try {
-          const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-          credUid = cred.user.uid;
-          resolvedName = cred.user.displayName || (selectedRole === 'doctor' ? 'الطبيب' : 'معمل التحاليل');
-        } catch (authErr: any) {
-          const colName = selectedRole === 'doctor' ? 'doctors' : 'labs';
-          const qSnap = await getDocs(collection(db, colName));
-          const matched = qSnap.docs.find(d => {
+          const [qSnap, sysSnap] = await Promise.all([
+            getDocs(collection(db, colName)),
+            getDocs(collection(db, 'system_users'))
+          ]);
+          const matched = qSnap.docs.find(d => d.data().email?.toLowerCase() === cleanEmail.toLowerCase());
+          const expectedRole = selectedRole === 'doctor' ? 'Cardiologist' : 'Lab / Imaging Center';
+          const sysMatch = sysSnap.docs.find(d => {
             const dt = d.data();
-            return dt.email?.toLowerCase() === cleanEmail.toLowerCase();
+            return dt.email?.toLowerCase() === cleanEmail.toLowerCase() && dt.role === expectedRole;
           });
-          if (matched) {
+
+          if (matched && matched.data().password) {
+            const mData = matched.data();
+            if (mData.password !== password) {
+              setError('كلمة المرور غير صحيحة.');
+              setLoading(false);
+              return;
+            }
             credUid = matched.id;
-            resolvedName = matched.data().name;
-          } else {
+            resolvedName = mData.name;
+            handledProvisioned = true;
+          } else if (sysMatch && sysMatch.data().password) {
+            const sData = sysMatch.data();
+            if (sData.password !== password) {
+              setError('كلمة المرور غير صحيحة.');
+              setLoading(false);
+              return;
+            }
+            if (sData.status === 'Inactive') {
+              setError(`حساب (${selectedRole === 'doctor' ? 'العيادة' : 'المعمل'}) غير نشط أو قيد المراجعة من المشرف العام.`);
+              setLoading(false);
+              return;
+            }
+            credUid = sysMatch.id;
+            resolvedName = sData.name;
+            handledProvisioned = true;
+          }
+        } catch {
+          // Fall through to Firebase Auth
+        }
+
+        if (!handledProvisioned) {
+          try {
+            const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+            credUid = cred.user.uid;
+            resolvedName = cred.user.displayName || (selectedRole === 'doctor' ? 'الطبيب' : 'معمل التحاليل');
+          } catch (authErr: any) {
             const localKey = selectedRole === 'doctor' ? 'cardios_local_pending_doctors' : 'cardios_local_pending_labs';
             const localList = JSON.parse(localStorage.getItem(localKey) || '[]');
             const localMatched = localList.find((item: any) => item.email?.toLowerCase() === cleanEmail.toLowerCase());
             if (localMatched) {
+              if (localMatched.password && localMatched.password !== password) {
+                setError('كلمة المرور غير صحيحة.');
+                setLoading(false);
+                return;
+              }
               if (localMatched.status === 'pending') {
                 setError(`حساب (${selectedRole === 'doctor' ? 'العيادة' : 'المعمل'}) في حالة مراجعة واعتماد حالياً من قِبل المشرف العام (Pending Approval).`);
+                setLoading(false);
+                return;
+              }
+              if (localMatched.status === 'suspended') {
+                setError('حسابك مجمّد مؤقتاً من قبل إدارة المنظومة.');
                 setLoading(false);
                 return;
               }
@@ -326,11 +453,21 @@ export default function AuthModal({
           }
         }
 
-        // Verify status in Firestore
+        // Verify status in Firestore (by uid first, fallback by email)
         const docCol = selectedRole === 'doctor' ? 'doctors' : 'labs';
-        const snap = await getDoc(doc(db, docCol, credUid));
+        let snap = await getDoc(doc(db, docCol, credUid));
+        if (!snap.exists()) {
+          const allSnap = await getDocs(collection(db, docCol));
+          const byEmail = allSnap.docs.find((d) => d.data().email?.toLowerCase() === cleanEmail.toLowerCase());
+          if (byEmail) {
+            snap = byEmail as any;
+            credUid = byEmail.id;
+          }
+        }
+
         if (snap.exists()) {
           const d = snap.data();
+          resolvedName = d.name || resolvedName;
           if (d.status === 'pending') {
             setError(`حساب (${selectedRole === 'doctor' ? 'العيادة' : 'المعمل'}) في حالة مراجعة واعتماد حالياً من قِبل المشرف العام (Pending Approval).`);
             setLoading(false);
@@ -342,10 +479,10 @@ export default function AuthModal({
             return;
           }
           if (selectedRole === 'doctor') {
-            resolvedClinicCode = d.clinicCode || 'CLINIC-AMMAR-101';
+            resolvedClinicCode = d.clinicCode || 'CLINIC-NEW';
           } else {
-            resolvedLabCode = d.labCode || 'LAB-AZHARI-88';
-            resolvedTechnicianName = d.technicianName || 'أخصائي التحاليل السريرية';
+            resolvedLabCode = d.labCode || 'LAB-NEW';
+            resolvedTechnicianName = d.technicianName || d.name || 'أخصائي التحاليل السريرية';
           }
         }
 
@@ -363,19 +500,10 @@ export default function AuthModal({
         setLoading(false);
         return;
       }
-      if (code === 'auth/operation-not-allowed') {
-        const cleanName = fullName.trim() || (cleanEmail ? cleanEmail.split('@')[0] : '') || (selectedRole === 'doctor' ? 'د/ عمار محمود' : 'معمل الأزهري للتحاليل');
-        if (selectedRole === 'doctor') {
-          onSuccess(selectedRole, 'doc-1', cleanName, 'CLINIC-AMMAR-101');
-        } else {
-          onSuccess(selectedRole, 'lab-1', cleanName, undefined, 'LAB-AZHARI-88', 'د. مروة الشيمي');
-        }
-        onClose();
-        return;
-      } else if (code === 'auth/email-already-in-use') {
+      if (code === 'auth/email-already-in-use') {
         setError('هذا البريد مسجل بالفعل، يرجى التبديل لتبويب تسجيل الدخول.');
-      } else if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
-        setError('البريد الإلكتروني أو كلمة المرور غير صحيحة.');
+      } else if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential' || code === 'auth/operation-not-allowed') {
+        setError('البريد الإلكتروني أو كلمة المرور غير صحيحة، أو الحساب غير مسجل بعد.');
       } else {
         setError(err.message || 'حدث خطأ أثناء المصادقة.');
       }
@@ -467,6 +595,17 @@ export default function AuthModal({
             status: 'pending',
             createdAt: new Date().toISOString()
           }, {merge: true});
+          await setDoc(doc(db, 'system_users', cred.user.uid), {
+            id: cred.user.uid,
+            name: labNameGoogle,
+            email: userEmail,
+            role: 'Lab / Imaging Center',
+            status: 'Inactive',
+            lastLogin: new Date().toLocaleDateString('en-US'),
+            facilityName: newLabRecord.branch,
+            labCode: genLabCode
+          }, {merge: true});
+          await markSeedFlags({ labsSeeded: true, systemUsersSeeded: true });
 
           trackSignupAttempt('lab', labNameGoogle, genLabCode);
 
@@ -478,21 +617,91 @@ export default function AuthModal({
           setLoading(false);
           return;
         }
-      } else {
-        // Doctor or Patient Google Login
-        await setDoc(doc(db, 'users', cred.user.uid), {
-          uid: cred.user.uid,
-          name: userDisplayName,
-          email: userEmail,
-          role: selectedRole,
-          lastLogin: new Date().toISOString()
-        }, {merge: true});
+      } else if (selectedRole === 'doctor') {
+        const docSnap = await getDoc(doc(db, 'doctors', cred.user.uid));
+        let existingDoc: any = docSnap.exists() ? { id: docSnap.id, ...docSnap.data() } : null;
 
-        setSuccessMessage(`تم تسجيل الدخول بحساب Google بنجاح!`);
-        setTimeout(() => {
-          onSuccess(selectedRole, cred.user.uid, userDisplayName, 'CLINIC-AMMAR-101');
-          onClose();
-        }, 500);
+        if (!existingDoc && userEmail) {
+          const qSnap = await getDocs(collection(db, 'doctors'));
+          const found = qSnap.docs.find((d) => d.data().email?.toLowerCase() === userEmail.toLowerCase());
+          if (found) existingDoc = { id: found.id, ...found.data() };
+        }
+
+        if (existingDoc) {
+          if (existingDoc.status === 'pending') {
+            setError('طلب انضمام هذه العيادة قيد المراجعة والاعتماد حالياً من قِبل المشرف العام.');
+            setLoading(false);
+            return;
+          }
+          if (existingDoc.status === 'suspended') {
+            setError('حساب العيادة مجمّد مؤقتاً من قبل الإدارة العامة للمنظومة.');
+            setLoading(false);
+            return;
+          }
+
+          setSuccessMessage('تم تسجيل الدخول بحساب Google بنجاح!');
+          setTimeout(() => {
+            onSuccess('doctor', existingDoc.id, existingDoc.name, existingDoc.clinicCode);
+            onClose();
+          }, 500);
+          return;
+        } else {
+          const cleanName = userDisplayName.replace(/[^a-zA-Z0-9]/g, '').slice(0, 4).toUpperCase();
+          const randNum = Math.floor(100 + Math.random() * 900);
+          const genClinicCode = `CLINIC-${cleanName || 'DOC'}-${randNum}`;
+          const newDocRecord = {
+            id: cred.user.uid,
+            name: userDisplayName,
+            clinicCode: genClinicCode,
+            clinicName: `عيادة ${userDisplayName}`,
+            specialty: 'استشاري أمراض القلب والقسطرة',
+            email: userEmail,
+            phone: cred.user.phoneNumber || phone.trim() || '01000000000',
+            status: 'pending',
+            verificationStatus: 'pending',
+            medicalLicenseNumber: `EGY-MED-${randNum}9`,
+            subscriptionExpiresAt: '2026-12-31',
+            aiQueriesUsed: 0,
+            aiQuotaLimit: 200,
+            isAiBlocked: false,
+            patientCount: 0,
+            maxPatientsLimit: 50,
+            planId: 'plan-starter',
+            planName: 'باقة العيادة الذكية (Cardio Starter)',
+            createdAt: new Date().toISOString()
+          };
+
+          await setDoc(doc(db, 'doctors', cred.user.uid), newDocRecord, {merge: true});
+          await setDoc(doc(db, 'users', cred.user.uid), {
+            uid: cred.user.uid,
+            name: userDisplayName,
+            email: userEmail,
+            role: 'doctor',
+            clinicCode: genClinicCode,
+            status: 'pending',
+            createdAt: new Date().toISOString()
+          }, {merge: true});
+          await setDoc(doc(db, 'system_users', cred.user.uid), {
+            id: cred.user.uid,
+            name: userDisplayName,
+            email: userEmail,
+            role: 'Cardiologist',
+            status: 'Inactive',
+            lastLogin: new Date().toLocaleDateString('en-US'),
+            licenseNumber: newDocRecord.medicalLicenseNumber,
+            clinicCode: genClinicCode
+          }, {merge: true});
+          await markSeedFlags({ doctorsSeeded: true, systemUsersSeeded: true });
+
+          trackSignupAttempt('doctor', userDisplayName, genClinicCode);
+          setSignupPendingInfo({
+            role: 'doctor',
+            name: userDisplayName,
+            code: genClinicCode
+          });
+          setLoading(false);
+          return;
+        }
       }
     } catch (err: any) {
       const code = err?.code || '';
@@ -500,8 +709,11 @@ export default function AuthModal({
         return;
       }
       if (code === 'auth/operation-not-allowed') {
-        const fallbackName = selectedRole === 'doctor' ? 'د/ عمار محمود' : 'معمل الأزهري للتحاليل';
-        onSuccess(selectedRole, 'doc-1', fallbackName, 'CLINIC-AMMAR-101');
+        if (selectedRole === 'lab') {
+          onSuccess('lab', 'lab-1', 'معمل الأزهري للتحاليل التخصصية', undefined, 'LAB-AZHARI-88', 'د. مروة الشيمي');
+        } else {
+          onSuccess('doctor', 'doc-1', 'د/ عمار محمود', 'CLINIC-AMMAR-101');
+        }
         onClose();
         return;
       }
@@ -657,20 +869,20 @@ export default function AuthModal({
                     type="text"
                     value={patientIdInput}
                     onChange={(e) => setPatientIdInput(e.target.value)}
-                    placeholder="أدخل رقم الملف (مثال: 1)"
+                    placeholder="أدخل رقم الملف (مثال: 1 أو P...)"
                     className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-teal-500 rounded-xl py-3 px-4 text-slate-900 font-mono text-center text-sm font-bold placeholder:text-slate-400 transition-colors"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    رمز الأمان (اختياري)
+                    رمز الأمان (Token) المطبوع على الكارت *
                   </label>
                   <input
                     type="text"
                     value={patientTokenInput}
                     onChange={(e) => setPatientTokenInput(e.target.value)}
-                    placeholder={generatePatientToken(patientIdInput || '1')}
+                    placeholder="مثال: cp_xxxxxxxxxx"
                     dir="ltr"
                     className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-teal-500 rounded-xl py-2.5 px-4 text-slate-700 font-mono text-center text-xs placeholder:text-slate-400 transition-colors"
                   />
@@ -679,13 +891,22 @@ export default function AuthModal({
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2"
+                  className="w-full py-3.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-sm transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
                 >
                   {loading ? (
                     <Loader2 size={16} className="animate-spin" />
                   ) : (
                     <span>فتح ملف المريض</span>
                   )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDemoPatientAccess}
+                  disabled={loading}
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs transition-all text-center cursor-pointer"
+                >
+                  تجربة سريعة لحساب المريض التجريبي (#1)
                 </button>
               </form>
             ) : (
@@ -748,7 +969,7 @@ export default function AuthModal({
                         onSuccess('lab', 'lab-1', 'معمل الأزهري للتحاليل السريرية', undefined, 'LAB-AZHARI-88', 'د. مروة الشيمي');
                       } else {
                         trackDemoTrial('doctor', 'دخول فوري عيادة د/ عمار');
-                        onSuccess(selectedRole, undefined, 'د/ عمار محمود');
+                        onSuccess(selectedRole, 'doc-1', 'د/ عمار محمود', 'CLINIC-AMMAR-101');
                       }
                       onClose();
                     }}

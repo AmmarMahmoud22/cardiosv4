@@ -223,6 +223,7 @@ export default function LaboratoryPortal({
   const [labStatus, setLabStatus] = useState<'active' | 'suspended' | 'pending'>('active');
 
   useEffect(() => {
+    setLabStatus('active');
     if (!labId || isDemoSession) return;
 
     try {
@@ -234,7 +235,7 @@ export default function LaboratoryPortal({
           setLabStatus(match.status);
         }
       }
-    } catch (e) {}
+    } catch {}
 
     const unsub = onSnapshot(doc(db, 'labs', labId), (snap) => {
       if (snap.exists()) {
@@ -257,17 +258,19 @@ export default function LaboratoryPortal({
   const [copiedLabCode, setCopiedLabCode] = useState(false);
 
   // Incoming Doctor Lab Orders
-  const [orders, setOrders] = useState<LabOrder[]>(DEFAULT_MOCK_ORDERS);
+  const [orders, setOrders] = useState<LabOrder[]>(isDemoSession ? DEFAULT_MOCK_ORDERS : []);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [orderFilter, setOrderFilter] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all');
 
-  // Clinic Partnership & Linking State
+  // Clinic Partnership & Linking State (scoped per labId)
   const [linkedClinics, setLinkedClinics] = useState<LinkedClinic[]>(() => {
     try {
-      const saved = localStorage.getItem('cardios_lab_linked_clinics');
+      const saved = localStorage.getItem(`cardios_lab_linked_clinics_${labId}`);
       if (saved) return JSON.parse(saved);
     } catch {}
-    return DEFAULT_LINKED_CLINICS;
+    return isDemoSession
+      ? DEFAULT_LINKED_CLINICS
+      : [{ id: 'all', name: 'جميع العيادات المتعاقدة', code: 'ALL' }];
   });
   const [selectedClinicId, setSelectedClinicId] = useState<string>('all');
   const [showLinkModal, setShowLinkModal] = useState<boolean>(false);
@@ -276,13 +279,37 @@ export default function LaboratoryPortal({
   const [linkModalSuccess, setLinkModalSuccess] = useState<string>('');
   const [linkingLoading, setLinkingLoading] = useState<boolean>(false);
 
+  // Reset clinic selection when labId changes
+  useEffect(() => {
+    setSelectedClinicId('all');
+    try {
+      const saved = localStorage.getItem(`cardios_lab_linked_clinics_${labId}`);
+      if (saved) {
+        setLinkedClinics(JSON.parse(saved));
+      } else {
+        setLinkedClinics(
+          isDemoSession
+            ? DEFAULT_LINKED_CLINICS
+            : [{ id: 'all', name: 'جميع العيادات المتعاقدة', code: 'ALL' }]
+        );
+      }
+    } catch {
+      setLinkedClinics(
+        isDemoSession
+          ? DEFAULT_LINKED_CLINICS
+          : [{ id: 'all', name: 'جميع العيادات المتعاقدة', code: 'ALL' }]
+      );
+    }
+  }, [labId, isDemoSession]);
+
   // Lab Data state
   const [patients, setPatients] = useState<PatientOption[]>([]);
-  const [selectedPatientId, setSelectedPatientId] = useState<string>('1');
+  const [selectedPatientId, setSelectedPatientId] = useState<string>(isDemoSession ? '1' : '');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
   const [notificationSentMessage, setNotificationSentMessage] = useState('');
   const [mobilePatientPickerOpen, setMobilePatientPickerOpen] = useState(false);
 
@@ -334,11 +361,11 @@ export default function LaboratoryPortal({
       if (list.length > 0) {
         setOrders(list);
       } else {
-        setOrders(DEFAULT_MOCK_ORDERS);
+        setOrders(isDemoSession ? DEFAULT_MOCK_ORDERS : []);
       }
     } catch (e) {
       console.warn('Notice loading lab orders:', e);
-      setOrders(DEFAULT_MOCK_ORDERS);
+      setOrders(isDemoSession ? DEFAULT_MOCK_ORDERS : []);
     } finally {
       setLoadingOrders(false);
     }
@@ -352,29 +379,46 @@ export default function LaboratoryPortal({
 
   const loadDoctors = async () => {
     try {
+      let labLinkedCodes: string[] = [];
+      if (!isDemoSession && labId) {
+        try {
+          const labSnap = await getDoc(doc(db, 'labs', labId));
+          if (labSnap.exists() && Array.isArray(labSnap.data().linkedClinics)) {
+            labLinkedCodes = labSnap.data().linkedClinics.map((c: string) => c.toUpperCase());
+          }
+        } catch {}
+      }
+
       const docsSnap = await getDocs(collection(db, 'doctors'));
       const dbClinics: LinkedClinic[] = [];
       docsSnap.forEach((d) => {
         const data = d.data();
         if (data.clinicCode) {
-          dbClinics.push({
-            id: d.id,
-            name: data.clinicName || `عيادة ${data.name}`,
-            code: data.clinicCode,
-            doctorName: data.name
-          });
+          if (isDemoSession || labLinkedCodes.length === 0 || labLinkedCodes.includes(data.clinicCode.toUpperCase())) {
+            dbClinics.push({
+              id: d.id,
+              name: data.clinicName || `عيادة ${data.name}`,
+              code: data.clinicCode,
+              doctorName: data.name
+            });
+          }
         }
       });
 
-      if (dbClinics.length > 0) {
-        setLinkedClinics((prev) => {
-          const map = new Map<string, LinkedClinic>();
+      setLinkedClinics((prev) => {
+        const map = new Map<string, LinkedClinic>();
+        map.set('all', { id: 'all', name: 'جميع العيادات المتعاقدة (عرض شامل)', code: 'ALL' });
+        if (isDemoSession) {
           DEFAULT_LINKED_CLINICS.forEach(c => map.set(c.id, c));
-          dbClinics.forEach(c => map.set(c.id, c));
-          prev.forEach(c => map.set(c.id, c));
-          return Array.from(map.values());
+        }
+        dbClinics.forEach(c => map.set(c.id, c));
+        prev.forEach(c => {
+          if (isDemoSession || c.id === 'all' || !DEFAULT_LINKED_CLINICS.some(dc => dc.id === c.id && dc.id !== 'all')) {
+            map.set(c.id, c);
+          }
         });
-      }
+        return Array.from(map.values());
+      });
     } catch (e) {
       console.warn('Error fetching doctors for lab:', e);
     }
@@ -406,8 +450,8 @@ export default function LaboratoryPortal({
         list.push({ id: docSnap.id, ...docSnap.data() } as PatientOption);
       });
 
-      if (list.length === 0) {
-        // Fallback demo patients if database empty
+      if (list.length === 0 && isDemoSession) {
+        // Fallback demo patients only in demo session if database empty
         list.push(
           { id: '1', name: 'أحمد محمود القاضي', dob: '1968-05-12', phone: '01012345678', labs: { ldl: '72 mg/dL', hdl: '44 mg/dL', creatinine: '0.9 mg/dL', egfr: '92 mL/min', potassium: '4.4 mmol/L', hba1c: '5.8%', troponin: 'سالب (<0.01 ng/mL)' } },
           { id: '2', name: 'سامية السعيد إبراهيم', dob: '1975-11-20', phone: '01198765432', labs: { ldl: '110 mg/dL', hdl: '38 mg/dL', creatinine: '1.2 mg/dL', egfr: '65 mL/min', potassium: '4.8 mmol/L', hba1c: '7.2%', troponin: 'سالب (<0.01 ng/mL)' } },
@@ -432,12 +476,11 @@ export default function LaboratoryPortal({
         historyList.push({ id: d.id, ...d.data() } as LabHistoryRecord);
       });
 
-      if (historyList.length === 0) {
-        // Generate baseline demo historical records for demo timeline
+      if (historyList.length === 0 && isDemoSession) {
+        // Generate baseline demo historical records only for demo session
         const now = new Date();
         const d1 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
         const d2 = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        const d3 = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
         if (patientId === '1') {
           historyList.push(
@@ -495,7 +538,11 @@ export default function LaboratoryPortal({
 
   const handleLogout = () => {
     sessionStorage.removeItem(LAB_SESSION_KEY);
-    setIsAuthenticated(false);
+    if (onLogout) {
+      onLogout();
+    } else {
+      setIsAuthenticated(false);
+    }
   };
 
   const handleSaveLabResults = async (e: React.FormEvent) => {
@@ -504,6 +551,7 @@ export default function LaboratoryPortal({
 
     setSaving(true);
     setSuccessMessage('');
+    setErrorMessage('');
     setNotificationSentMessage('');
 
     const defaultPdfAttachment = {
@@ -618,7 +666,8 @@ export default function LaboratoryPortal({
       }, 5000);
     } catch (err) {
       console.error('Error saving lab results:', err);
-      alert('حدث خطأ أثناء حفظ التحاليل. يرجى التحقق من الاتصال.');
+      setErrorMessage('حدث خطأ أثناء حفظ التحاليل. يرجى التحقق من الاتصال والمحاولة مرة أخرى.');
+      setTimeout(() => setErrorMessage(''), 5000);
     } finally {
       setSaving(false);
     }
@@ -666,7 +715,7 @@ export default function LaboratoryPortal({
         const updated = [...linkedClinics, newClinic];
         setLinkedClinics(updated);
         try {
-          localStorage.setItem('cardios_lab_linked_clinics', JSON.stringify(updated));
+          localStorage.setItem(`cardios_lab_linked_clinics_${labId}`, JSON.stringify(updated));
         } catch {}
         setSelectedClinicId(matchedDoc.id);
         setLinkModalSuccess(`تم ربط ${matchedDoc.name} بنجاح!`);
@@ -686,7 +735,7 @@ export default function LaboratoryPortal({
         const updated = [...linkedClinics, newClinic];
         setLinkedClinics(updated);
         try {
-          localStorage.setItem('cardios_lab_linked_clinics', JSON.stringify(updated));
+          localStorage.setItem(`cardios_lab_linked_clinics_${labId}`, JSON.stringify(updated));
         } catch {}
         setSelectedClinicId(newClinic.id);
         setLinkModalSuccess(`تم تسجيل كود التعاقد (${clean}) وربطه بالمعمل.`);
@@ -1269,7 +1318,8 @@ export default function LaboratoryPortal({
                                 ? 'bg-blue-100 text-blue-800'
                                 : 'bg-teal-100 text-teal-800'
                             }`}>
-                              {p.doctorId === 'doc-2' || p.clinicCode === 'CLINIC-SHERIF-202' ? 'عيادة د/ شريف' : 'عيادة د/ عمار'}
+                              {linkedClinics.find(c => c.id === p.doctorId || (p.clinicCode && c.code === p.clinicCode))?.name ||
+                                (p.clinicCode ? `عيادة (${p.clinicCode})` : 'عيادة د/ عمار')}
                             </span>
                           </div>
                         </div>
@@ -1774,6 +1824,13 @@ export default function LaboratoryPortal({
                     </div>
 
                     {/* Feedback Messages */}
+                    {errorMessage && (
+                      <div className="p-4 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs font-bold flex items-center gap-2">
+                        <AlertCircle size={18} className="text-rose-600 shrink-0" />
+                        <span>{errorMessage}</span>
+                      </div>
+                    )}
+
                     {successMessage && (
                       <div className="p-4 bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-2xl text-xs font-bold space-y-1 animate-in fade-in">
                         <div className="flex items-center gap-2">

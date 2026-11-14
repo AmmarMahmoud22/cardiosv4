@@ -77,6 +77,9 @@ export default function App() {
   const handleDoctorLogout = () => {
     setDoctorAuthenticated(false);
     setDoctorAuthed(false);
+    setDoctorId('doc-1');
+    setDoctorName('د/ عمار محمود');
+    setClinicCode('CLINIC-AMMAR-101');
     navigateTo('landing');
   };
 
@@ -123,6 +126,10 @@ export default function App() {
             setIsLabDemoSession(true);
           }}
           onLogout={() => {
+            setLabId('lab-1');
+            setLabName('معمل الأزهري للتحاليل التخصصية والوراثية');
+            setLabCode('LAB-AZHARI-88');
+            setTechnicianName('د. مروة الشيمي (استشاري الكيمياء الإكلينيكية)');
             setIsLabDemoSession(true);
             navigateTo('landing');
           }}
@@ -133,17 +140,27 @@ export default function App() {
       {view === 'landing' && (
         <LandingPage
           onLaunch={() => {
+            setDoctorId('doc-1');
+            setDoctorName('د/ عمار محمود');
+            setClinicCode('CLINIC-AMMAR-101');
             setDoctorAuthed(true);
             navigateTo('dashboard');
           }}
-          onOpenLabPortal={() => navigateTo('lab-portal')}
+          onOpenLabPortal={() => {
+            setLabId('lab-1');
+            setLabName('معمل الأزهري للتحاليل التخصصية والوراثية');
+            setLabCode('LAB-AZHARI-88');
+            setTechnicianName('د. مروة الشيمي (استشاري الكيمياء الإكلينيكية)');
+            setIsLabDemoSession(true);
+            navigateTo('lab-portal');
+          }}
           onOpenPatientPortal={(pId) => {
             setPortalPatientId(pId || '1');
             navigateTo('portal');
           }}
-          onOpenAuthModal={(role) => {
+          onOpenAuthModal={(role, mode) => {
             setAuthRole(role || 'doctor');
-            setAuthModalMode('login');
+            setAuthModalMode(mode || 'login');
             setAuthModalOpen(true);
           }}
           onOpenAdminPortal={() => navigateTo('admin')}

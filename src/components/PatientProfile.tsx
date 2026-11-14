@@ -70,6 +70,7 @@ export default function PatientProfile({
   const [heartRate, setHeartRate] = useState('');
   const [savingRx, setSavingRx] = useState(false);
   const [rxSyncSuccess, setRxSyncSuccess] = useState(false);
+  const [rxError, setRxError] = useState('');
 
   // New med inputs
   const [medName, setMedName] = useState('');
@@ -161,6 +162,7 @@ export default function PatientProfile({
 
   const savePrescription = async () => {
     setSavingRx(true);
+    setRxError('');
     try {
       await addDoc(collection(db, 'patients', patientId, 'prescriptions'), {
         medications,
@@ -170,7 +172,7 @@ export default function PatientProfile({
       setTimeout(() => setRxSyncSuccess(false), 3000);
     } catch (error) {
       console.error('Error saving prescription:', error);
-      alert('تعذر حفظ الروشتة، يرجى المحاولة ثانية.');
+      setRxError('تعذر حفظ الروشتة، يرجى المحاولة ثانية.');
     } finally {
       setSavingRx(false);
     }
@@ -492,10 +494,7 @@ export default function PatientProfile({
             <div className="flex items-center gap-2">
               <button
                 onClick={() => {
-                  if (isAiBlocked) {
-                    alert('⚠️ عذراً، خدمة فحص التعارضات بالذكاء الاصطناعي موقوفة لهذه العيادة من قِبل المشرف العام (Super Admin).');
-                    return;
-                  }
+                  if (isAiBlocked) return;
                   setAiTrigger(prev => prev + 1);
                 }}
                 disabled={isAiBlocked}
@@ -634,6 +633,13 @@ export default function PatientProfile({
               <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-bold bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-200">
                 <Check size={14} />
                 <span>تمت المزامنة بنجاح! ستظهر الروشتة للمريض عند مسح الكود.</span>
+              </div>
+            )}
+
+            {rxError && (
+              <div className="flex items-center gap-1.5 text-xs text-rose-700 font-bold bg-rose-100 px-3 py-1.5 rounded-xl border border-rose-200">
+                <AlertTriangle size={14} />
+                <span>{rxError}</span>
               </div>
             )}
 

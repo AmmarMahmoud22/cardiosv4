@@ -118,6 +118,7 @@ export default function DoctorSettingsModal({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -163,9 +164,10 @@ export default function DoctorSettingsModal({
     if (!file) return;
 
     if (file.size > 5 * 1024 * 1024) {
-      alert('حجم صورة اللوجو كبير جداً. يرجى اختيار صورة أقل من 5 ميجابايت.');
+      setErrorMsg('حجم صورة اللوجو كبير جداً. يرجى اختيار صورة أقل من 5 ميجابايت.');
       return;
     }
+    setErrorMsg('');
 
     const reader = new FileReader();
     reader.onload = async () => {
@@ -231,7 +233,7 @@ export default function DoctorSettingsModal({
       }, 400);
     } catch (err) {
       console.error('Error saving settings:', err);
-      alert('حدث خطأ أثناء حفظ الإعدادات، يرجى المحاولة مرة أخرى.');
+      setErrorMsg('حدث خطأ أثناء حفظ الإعدادات، يرجى المحاولة مرة أخرى.');
     } finally {
       setSaving(false);
     }
@@ -339,6 +341,11 @@ export default function DoctorSettingsModal({
 
         {/* Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-6 flex-1">
+          {errorMsg && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700">
+              {errorMsg}
+            </div>
+          )}
           {loading ? (
             <div className="py-12 text-center text-slate-400 text-xs flex flex-col items-center gap-2">
               <RefreshCw size={24} className="animate-spin text-teal-600" />

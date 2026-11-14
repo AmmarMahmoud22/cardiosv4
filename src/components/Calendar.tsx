@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, onSnapshot, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Appointment } from '../types/appointment';
 import { format, addDays, startOfWeek } from 'date-fns';
-import { Share2, Calendar as CalendarIcon, Plus, Settings, Printer } from 'lucide-react';
+import { Share2, Calendar as CalendarIcon, Plus, Settings, Printer, Trash2 } from 'lucide-react';
 import AppointmentBookingModal from './AppointmentBookingModal';
 import ClinicScheduleModal from './ClinicScheduleModal';
 import ClinicBookingPosterModal from './ClinicBookingPosterModal';
@@ -38,8 +38,15 @@ export default function CalendarView({
     });
   }, [doctorId, isDemoSession]);
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
   const updateStatus = async (id: string, status: string) => {
     await updateDoc(doc(db, 'appointments', id), { status });
+  };
+
+  const deleteAppointment = async (id: string) => {
+    await deleteDoc(doc(db, 'appointments', id));
+    setConfirmDeleteId(null);
   };
 
   return (
@@ -142,23 +149,43 @@ export default function CalendarView({
                       <span className="font-mono text-[11px] bg-amber-50 text-amber-900 px-1.5 py-0.2 rounded font-bold">
                         {app.queueNumber ? `دور #${app.queueNumber}` : (app.startTime ? format(new Date(app.startTime), 'HH:mm') : 'كشف')}
                       </span>
-                      <button
-                        onClick={() => {
-                          const message = `*تذكير بموعد العيادة - Cardios Clinic* 🫀\nمرحباً ${app.patientName}،\nنود تذكيرك بموعدك القادم:\n📅 *الموعد:* ${app.date || format(new Date(app.startTime), 'yyyy/MM/dd')}\n🔢 *رقم الدور:* #${app.queueNumber || '1'}\n🩺 *نوع الزيارة:* ${app.type}\n📍 عيادة القلب والأوعية الدموية`;
-                          window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-                        }}
-                        className="text-emerald-600 hover:text-emerald-700 p-1 hover:bg-emerald-50 rounded-lg transition-colors"
-                        title="إرسال تذكير عبر الواتساب"
-                      >
-                        <Share2 size={13} />
-                      </button>
+                      <div className="flex items-center gap-0.5">
+                        <a
+                          href={`https://wa.me/?text=${encodeURIComponent(`*تذكير بموعد العيادة - Cardios Clinic* 🫀\nمرحباً ${app.patientName}،\nنود تذكيرك بموعدك القادم:\n📅 *الموعد:* ${app.date || format(new Date(app.startTime), 'yyyy/MM/dd')}\n🔢 *رقم الدور:* #${app.queueNumber || '1'}\n🩺 *نوع الزيارة:* ${app.type}\n📍 عيادة القلب والأوعية الدموية`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-emerald-600 hover:text-emerald-700 p-1 hover:bg-emerald-50 rounded-lg transition-colors"
+                          title="إرسال تذكير عبر الواتساب"
+                        >
+                          <Share2 size={13} />
+                        </a>
+                        {confirmDeleteId === app.id ? (
+                          <button
+                            type="button"
+                            onClick={() => deleteAppointment(app.id)}
+                            className="text-[10px] bg-rose-600 hover:bg-rose-700 text-white font-bold px-1.5 py-0.5 rounded-md transition-colors cursor-pointer"
+                            title="تأكيد حذف الموعد"
+                          >
+                            تأكيد
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(app.id)}
+                            className="text-slate-400 hover:text-rose-600 p-1 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="حذف الموعد"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <p className="font-black text-slate-900 truncate">{app.patientName}</p>
                     {app.patientPhone && (
                       <p className="text-[10px] text-slate-400 font-mono">{app.patientPhone}</p>
                     )}
                     <select
-                      defaultValue={app.status || 'Scheduled'}
+                      value={app.status || 'Scheduled'}
                       onChange={(e) => updateStatus(app.id, e.target.value)}
                       className="w-full mt-1 text-[10px] bg-slate-50 border border-slate-200 rounded-lg p-1 text-slate-700 font-bold focus:ring-1 focus:ring-amber-500"
                     >

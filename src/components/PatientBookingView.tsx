@@ -58,6 +58,7 @@ export default function PatientBookingView({
 
   const [loadingDays, setLoadingDays] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [bookingError, setBookingError] = useState<string>('');
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
   const [showReceipt, setShowReceipt] = useState<boolean>(false);
 
@@ -69,18 +70,33 @@ export default function PatientBookingView({
     const loadScheduleAndSlots = async () => {
       setLoadingDays(true);
       try {
-        const docId = 'doc-1';
-        const schedSnap = await getDoc(doc(db, 'doctor_schedules', docId));
+        // Resolve the clinic's doctor dynamically using clinicCode
+        let resolvedDocId = 'doc-1';
+        let matchedDocData: any = null;
+        try {
+          const docsSnap = await getDocs(collection(db, 'doctors'));
+          const matched = docsSnap.docs.find(
+            (d) => d.data().clinicCode?.toUpperCase() === clinicCode.toUpperCase()
+          );
+          if (matched) {
+            resolvedDocId = matched.id;
+            matchedDocData = matched.data();
+          }
+        } catch (err) {
+          console.warn('Notice looking up clinic by code:', err);
+        }
+
+        const schedSnap = await getDoc(doc(db, 'doctor_schedules', resolvedDocId));
 
         let currentSchedule: DoctorScheduleSettings;
         if (schedSnap.exists()) {
           currentSchedule = schedSnap.data() as DoctorScheduleSettings;
         } else {
           currentSchedule = {
-            doctorId: 'doc-1',
-            doctorName: 'د/ عمار محمود',
-            clinicName: 'عيادة أمراض القلب والقسطرة',
-            specialty: 'استشاري أمراض القلب والقسطرة التداخلية',
+            doctorId: resolvedDocId,
+            doctorName: matchedDocData?.name || 'د/ عمار محمود',
+            clinicName: matchedDocData?.clinicName || 'عيادة أمراض القلب والقسطرة',
+            specialty: matchedDocData?.specialty || 'استشاري أمراض القلب والقسطرة التداخلية',
             clinicCode,
             workingDays: [
               { dayOfWeek: 6, dayNameAr: 'السبت', enabled: true, maxCapacity: 10, startTime: '16:00', endTime: '21:00' },
@@ -95,7 +111,13 @@ export default function PatientBookingView({
 
         const appointmentsRef = collection(db, 'appointments');
         const appSnap = await getDocs(appointmentsRef);
-        const allAppointments = appSnap.docs.map(d => d.data());
+        const allAppointments = appSnap.docs
+          .map(d => d.data())
+          .filter((a: any) =>
+            (a.doctorId && a.doctorId === resolvedDocId) ||
+            (a.clinicCode && a.clinicCode.toUpperCase() === clinicCode.toUpperCase()) ||
+            (!a.doctorId && !a.clinicCode && resolvedDocId === 'doc-1')
+          );
 
         const daysList = [];
         const today = new Date();
@@ -107,7 +129,11 @@ export default function PatientBookingView({
 
           if (matchingConfig) {
             const dateStr = format(checkDate, 'yyyy-MM-dd');
-            const bookedCount = allAppointments.filter((a: any) => a.date === dateStr || (a.startTime && a.startTime.startsWith(dateStr))).length;
+            const bookedCount = allAppointments.filter(
+              (a: any) =>
+                a.status !== 'Cancelled' &&
+                (a.date === dateStr || (a.startTime && a.startTime.startsWith(dateStr)))
+            ).length;
             const maxCap = matchingConfig.maxCapacity || 10;
             const remaining = Math.max(0, maxCap - bookedCount);
             const isFull = remaining === 0;
@@ -169,8 +195,9 @@ export default function PatientBookingView({
 
   const handleBookingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setBookingError('');
     if (!patientName.trim() || !patientPhone.trim() || !patientAge.trim() || !selectedDateStr) {
-      alert('يرجى استكمال جميع البيانات المطلوبة (الاسم، الهاتف، والسن).');
+      setBookingError('يرجى استكمال جميع البيانات المطلوبة (الاسم، الهاتف، والسن).');
       return;
     }
 
@@ -178,13 +205,14 @@ export default function PatientBookingView({
 
     try {
       const selectedDayObj = availableDays.find(d => d.dateStr === selectedDateStr);
+      const targetDoctorId = schedule?.doctorId || 'doc-1';
 
       if (isWaitlistMode || selectedDayObj?.isFull) {
         const waitlistRef = collection(db, 'waitlists');
         const nextAvailableDay = availableDays.find(d => d.dateStr > selectedDateStr && !d.isFull) || availableDays[0];
 
         const waitlistEntry: Omit<WaitlistEntry, 'id'> = {
-          doctorId: schedule?.doctorId || 'doc-1',
+          doctorId: targetDoctorId,
           clinicCode,
           patientName: patientName.trim(),
           patientPhone: patientPhone.trim(),
@@ -204,10 +232,14 @@ export default function PatientBookingView({
       const appointmentsRef = collection(db, 'appointments');
       const q = query(appointmentsRef, where('date', '==', selectedDateStr));
       const existingSnap = await getDocs(q);
-      const queueNumber = existingSnap.size + 1;
+      const clinicDayBookings = existingSnap.docs.filter((d) => {
+        const data = d.data();
+        return data.doctorId === targetDoctorId || data.clinicCode === clinicCode;
+      });
+      const queueNumber = clinicDayBookings.length + 1;
 
       const newAppointment = {
-        doctorId: schedule?.doctorId || 'doc-1',
+        doctorId: targetDoctorId,
         clinicCode,
         patientName: patientName.trim(),
         patientPhone: patientPhone.trim(),
@@ -242,7 +274,7 @@ export default function PatientBookingView({
       setShowReceipt(true);
     } catch (err) {
       console.error('Error completing booking:', err);
-      alert('حدث خطأ أثناء حفظ الموعد، يرجى إعادة المحاولة.');
+      setBookingError('حدث خطأ أثناء حفظ الموعد، يرجى إعادة المحاولة.');
     } finally {
       setSubmitting(false);
     }
@@ -280,6 +312,13 @@ export default function PatientBookingView({
             <h2 className="text-base sm:text-lg font-black text-slate-900">حجز موعد جديد بالعيادة أونلاين</h2>
             <p className="text-xs text-slate-500">اختر اليوم المناسب وأدخل بياناتك لاستلام إيصال الكشف ورقم الدور فوراً</p>
           </div>
+
+          {bookingError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs font-bold text-rose-700 flex items-center gap-2">
+              <AlertTriangle size={16} className="text-rose-600 shrink-0" />
+              <span>{bookingError}</span>
+            </div>
+          )}
 
           {loadingDays ? (
             <div className="py-12 text-center text-slate-400 text-xs flex flex-col items-center gap-2">

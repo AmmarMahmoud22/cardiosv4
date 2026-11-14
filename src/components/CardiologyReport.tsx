@@ -59,6 +59,7 @@ export default function CardiologyReport({patientName, patientId}: Props) {
   const [activeTab, setActiveTab] = useState<'echo' | 'valves' | 'ecg' | 'conclusion'>('echo');
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<{ type: 'error' | 'info'; message: string } | null>(null);
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [showCalcModal, setShowCalcModal] = useState(false);
 
@@ -107,8 +108,11 @@ export default function CardiologyReport({patientName, patientId}: Props) {
   };
 
   const handleSaveReport = async () => {
+    setSaveFeedback(null);
     if (!patientId) {
-      alert('Report saved locally.');
+      setSaveFeedback({ type: 'info', message: 'تم حفظ التقرير محلياً لعدم ارتباطه بمعرف مريض في قاعدة البيانات.' });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
       return;
     }
     setSaving(true);
@@ -122,7 +126,7 @@ export default function CardiologyReport({patientName, patientId}: Props) {
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (e) {
       console.error(e);
-      alert('Failed to save report to database.');
+      setSaveFeedback({ type: 'error', message: 'تعذر حفظ التقرير في قاعدة البيانات. يرجى المحاولة مرة أخرى.' });
     } finally {
       setSaving(false);
     }
@@ -238,6 +242,17 @@ ${data.recommendations}
             <span>حاسبات القلب السريرية (ASCVD / LVMI)</span>
           </button>
         </div>
+
+        {saveFeedback && (
+          <div className={`mt-3 p-2.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${
+            saveFeedback.type === 'error'
+              ? 'bg-red-50 border-red-200 text-red-700'
+              : 'bg-blue-50 border-blue-200 text-blue-700'
+          }`}>
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>{saveFeedback.message}</span>
+          </div>
+        )}
       </div>
 
       {/* Tabs Selector for Editing (Hidden when printing) */}

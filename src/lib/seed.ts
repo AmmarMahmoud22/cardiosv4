@@ -453,23 +453,85 @@ export const seedDatabase = async () => {
       }
     }
 
-    // 1. Seed Doctors only if they do not already exist
-    for (const docProfile of SEED_DOCTORS) {
-      const docRef = doc(db, 'doctors', docProfile.id);
-      const snap = await getDoc(docRef);
-      if (!snap.exists()) {
-        await setDoc(docRef, docProfile);
+    // Check persistent seed flags & deleted IDs before seeding doctors or labs
+    let doctorsSeeded = false;
+    let labsSeeded = false;
+    const deletedIds = new Set<string>();
+    try {
+      doctorsSeeded = localStorage.getItem('cardios_doctors_seeded') === 'true';
+      labsSeeded = localStorage.getItem('cardios_labs_seeded') === 'true';
+      const rawDel = localStorage.getItem('cardios_deleted_ids');
+      if (rawDel) {
+        const parsed = JSON.parse(rawDel);
+        if (Array.isArray(parsed)) parsed.forEach((id) => deletedIds.add(id));
+      }
+    } catch {
+      // ignore storage errors
+    }
+
+    const flagsRef = doc(db, 'system_config', 'seed_flags');
+    const flagsSnap = await getDoc(flagsRef).catch(() => null);
+    if (flagsSnap && flagsSnap.exists()) {
+      const fData = flagsSnap.data() as any;
+      if (fData.doctorsSeeded) doctorsSeeded = true;
+      if (fData.labsSeeded) labsSeeded = true;
+      if (Array.isArray(fData.deletedIds)) {
+        fData.deletedIds.forEach((id: string) => deletedIds.add(id));
       }
     }
 
-    // 2. Seed Diagnostic Laboratories only if they do not already exist
-    for (const labProfile of SEED_LABS) {
-      const labRef = doc(db, 'labs', labProfile.id);
-      const snap = await getDoc(labRef);
-      if (!snap.exists()) {
-        await setDoc(labRef, labProfile);
-      }
+    // Also inspect system_users: if initialized, never resurrect seed items absent from system_users
+    let sysUserIds: Set<string> | null = null;
+    const sysSnap = await getDocs(collection(db, 'system_users')).catch(() => null);
+    if (sysSnap && !sysSnap.empty) {
+      sysUserIds = new Set(sysSnap.docs.map((d) => d.id));
+      doctorsSeeded = true;
+      labsSeeded = true;
     }
+
+    // 1. Seed Doctors only on initial setup (never resurrect after deletion)
+    if (!doctorsSeeded) {
+      for (const docProfile of SEED_DOCTORS) {
+        if (deletedIds.has(docProfile.id)) continue;
+        if (sysUserIds && !sysUserIds.has(docProfile.id)) continue;
+        const docRef = doc(db, 'doctors', docProfile.id);
+        const snap = await getDoc(docRef);
+        if (!snap.exists()) {
+          await setDoc(docRef, docProfile);
+        }
+      }
+      doctorsSeeded = true;
+    }
+
+    // 2. Seed Diagnostic Laboratories only on initial setup (never resurrect after deletion)
+    if (!labsSeeded) {
+      for (const labProfile of SEED_LABS) {
+        if (deletedIds.has(labProfile.id)) continue;
+        if (sysUserIds && !sysUserIds.has(labProfile.id)) continue;
+        const labRef = doc(db, 'labs', labProfile.id);
+        const snap = await getDoc(labRef);
+        if (!snap.exists()) {
+          await setDoc(labRef, labProfile);
+        }
+      }
+      labsSeeded = true;
+    }
+
+    try {
+      if (doctorsSeeded) localStorage.setItem('cardios_doctors_seeded', 'true');
+      if (labsSeeded) localStorage.setItem('cardios_labs_seeded', 'true');
+    } catch {
+      // ignore
+    }
+    await setDoc(
+      flagsRef,
+      {
+        doctorsSeeded,
+        labsSeeded,
+        deletedIds: Array.from(deletedIds)
+      },
+      { merge: true }
+    ).catch(() => {});
 
     // 3. Seed Patients with doctorId & clinicCode
     for (const patient of MOCK_PATIENTS_DETAILED) {

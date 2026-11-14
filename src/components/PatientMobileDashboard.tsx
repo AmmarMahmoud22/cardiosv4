@@ -98,6 +98,17 @@ export default function PatientMobileDashboard({
   const [tokenInput, setTokenInput] = useState<string>('');
   const [verifyingToken, setVerifyingToken] = useState<boolean>(false);
 
+  // Dynamic Custom Doctor Phone / WhatsApp number
+  const [customDoctorPhone, setCustomDoctorPhone] = useState<string>(() => {
+    return localStorage.getItem('cardios_custom_doctor_phone') || '01012345678';
+  });
+
+  useEffect(() => {
+    setSelectedPatientId(initialPatientId);
+    setTokenInput('');
+    setAuthError('');
+  }, [initialPatientId]);
+
   // Real-time listener for patient document (labs, doctor orders, etc.)
   useEffect(() => {
     if (authStatus !== 'authorized') return;
@@ -289,8 +300,8 @@ export default function PatientMobileDashboard({
         timestamp: new Date().toISOString()
       });
       setNewChatText('');
-    } catch (e) {
-      alert('فشل في إرسال الرسالة، برجاء المحاولة لاحقاً.');
+    } catch {
+      setFeedback({ type: 'alert', message: 'فشل في إرسال الرسالة، برجاء المحاولة لاحقاً.' });
     } finally {
       setSendingChat(false);
     }
@@ -344,7 +355,7 @@ export default function PatientMobileDashboard({
     const hr = Number(heartRate);
 
     if (!sys || !dia || !hr) {
-      alert('برجاء إدخال قياسات الضغط الانقباضي والانبساطي والنبض.');
+      setFeedback({ type: 'warning', message: 'برجاء إدخال قياسات الضغط الانقباضي والانبساطي والنبض.' });
       return;
     }
 
@@ -391,7 +402,7 @@ export default function PatientMobileDashboard({
       setHeartRate('');
     } catch (e) {
       console.error(e);
-      alert('حدث خطأ أثناء حفظ القراءات.');
+      setFeedback({ type: 'alert', message: 'حدث خطأ أثناء حفظ القراءات، يرجى المحاولة مرة أخرى.' });
     } finally {
       setSubmitting(false);
     }
@@ -479,49 +490,77 @@ export default function PatientMobileDashboard({
               </button>
             </form>
 
-            {/* Quick Demo Autofill Helper */}
-            <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 space-y-2 mt-2">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="font-medium text-blue-700">رمز الأمان المعتمد لهذا المريض:</span>
-                <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-blue-300 text-blue-800">
-                  {generatePatientToken(selectedPatientId)}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  const token = generatePatientToken(selectedPatientId);
-                  setTokenInput(token);
-                  setVerifyingToken(true);
-                  setAuthError('');
-                  try {
-                    const result = await verifyPatientAccess(selectedPatientId, token);
-                    if (result.valid) {
-                      setAuthStatus('authorized');
-                      if (result.patientName) setPatientName(result.patientName);
-                    } else {
-                      setAuthError(result.reason || 'رمز الأمان غير مطابق.');
+            {/* Quick Demo Autofill Helper (strictly restricted to demo patient #1) */}
+            {selectedPatientId === '1' && (
+              <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 space-y-2 mt-2">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-medium text-blue-700">رمز الأمان للحساب التجريبي (#1):</span>
+                  <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-blue-300 text-blue-800">
+                    {generatePatientToken(selectedPatientId)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const token = generatePatientToken(selectedPatientId);
+                    setTokenInput(token);
+                    setVerifyingToken(true);
+                    setAuthError('');
+                    try {
+                      const result = await verifyPatientAccess(selectedPatientId, token);
+                      if (result.valid) {
+                        setAuthStatus('authorized');
+                        if (result.patientName) setPatientName(result.patientName);
+                      } else {
+                        setAuthError(result.reason || 'رمز الأمان غير مطابق.');
+                      }
+                    } finally {
+                      setVerifyingToken(false);
                     }
-                  } finally {
-                    setVerifyingToken(false);
-                  }
-                }}
-                disabled={verifyingToken}
-                className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs shadow-2xs active:scale-98"
-              >
-                <CheckCircle2 size={14} />
-                <span>ملء الرمز تلقائياً والدخول الآن ({generatePatientToken(selectedPatientId)})</span>
-              </button>
-            </div>
+                  }}
+                  disabled={verifyingToken}
+                  className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs shadow-2xs active:scale-98"
+                >
+                  <CheckCircle2 size={14} />
+                  <span>ملء الرمز تلقائياً والدخول للحساب التجريبي</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Clinic support footer */}
-        <div className="pt-6 pb-2 text-center space-y-2 border-t border-gray-200">
-          <p className="text-[11px] text-gray-500">
-            إذا لم يكن معك كارت المتابعة الخاص بك، يرجى التواصل مع عيادة القلب مباشرة:
+        {/* Dynamic Doctor/Clinic Support Footer */}
+        <div className="pt-6 pb-2 text-center space-y-3 border-t border-gray-200">
+          <p className="text-[11px] font-bold text-gray-700">
+            إذا لم يكن معك كارت المتابعة، تواصل مع عيادة طبيبك المعالج مباشرة:
           </p>
-          <div className="flex flex-wrap justify-center gap-2 pt-1">
+
+          {/* Doctor Direct WhatsApp Input & Trigger */}
+          <div className="max-w-xs mx-auto space-y-2">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customDoctorPhone}
+                onChange={(e) => setCustomDoctorPhone(e.target.value)}
+                placeholder="أدخل رقم هاتف/واتساب طبيبك"
+                className="flex-1 px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-lg text-center font-mono font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+              />
+              <a
+                href={`https://wa.me/${customDoctorPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('مرحباً، أود التواصل مع عيادة الطبيب بشأن كارت المتابعة الذكي.')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-lg inline-flex items-center gap-1 shadow-xs transition-colors shrink-0"
+              >
+                <Send size={13} />
+                <span>واتساب الطبيب</span>
+              </a>
+            </div>
+            <span className="text-[10px] text-gray-400 block">
+              (تواصل مباشر مع رقم عيادة الطبيب المعالج المسجل)
+            </span>
+          </div>
+
+          <div className="flex flex-wrap justify-center gap-2 pt-2 border-t border-gray-100">
             {onOpenAuth && (
               <button
                 type="button"
@@ -543,13 +582,14 @@ export default function PatientMobileDashboard({
               </button>
             )}
             <a
-              href={`https://wa.me/${CLINIC_WHATSAPP}`}
+              href={`https://wa.me/201146963589?text=${encodeURIComponent('مرحباً، أود حجز تجربة ديمو للأطباء والمراكز الطبية.')}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg inline-flex items-center gap-1"
+              className="text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 px-3 py-1.5 rounded-lg inline-flex items-center gap-1"
+              title="دعم المنظومة وحجز الديمو للأطباء والمراكز"
             >
-              <Send size={13} />
-              <span>واتساب العيادة ({CLINIC_PHONE})</span>
+              <Send size={12} />
+              <span>دعم المنظومة وحجز الديمو (01146963589)</span>
             </a>
           </div>
         </div>

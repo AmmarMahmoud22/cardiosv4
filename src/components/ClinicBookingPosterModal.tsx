@@ -37,6 +37,7 @@ export default function ClinicBookingPosterModal({
   const [currentSpecialty, setCurrentSpecialty] = useState(specialty);
   const [logoUrl, setLogoUrl] = useState<string>('');
   const [logoIcon, setLogoIcon] = useState<string>('HeartPulse');
+  const [copiedNotice, setCopiedNotice] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -80,8 +81,9 @@ export default function ClinicBookingPosterModal({
         url: bookingUrl
       }).catch(() => {});
     } else if (navigator.clipboard) {
-      navigator.clipboard.writeText(bookingUrl);
-      alert('تم نسخ رابط الحجز أونلاين للحافظة!');
+      navigator.clipboard.writeText(bookingUrl).catch(() => {});
+      setCopiedNotice(true);
+      setTimeout(() => setCopiedNotice(false), 2500);
     }
   };
 
@@ -143,7 +145,7 @@ export default function ClinicBookingPosterModal({
               title="مشاركة رابط الحجز"
             >
               <Share2 size={16} />
-              <span className="hidden sm:inline">مشاركة</span>
+              <span className="hidden sm:inline">{copiedNotice ? 'تم النسخ ✓' : 'مشاركة'}</span>
             </button>
             <button
               onClick={onClose}

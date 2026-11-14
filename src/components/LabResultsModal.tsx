@@ -37,6 +37,7 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
   const [doctorRecommendation, setDoctorRecommendation] = useState('');
   const [sendingOrder, setSendingOrder] = useState(false);
   const [orderSentSuccess, setOrderSentSuccess] = useState(false);
+  const [orderError, setOrderError] = useState('');
 
   // Option 3: AI Patient Explanation State
   const [showAiExplanation, setShowAiExplanation] = useState(false);
@@ -93,6 +94,7 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
   const handleSendDoctorOrder = async () => {
     if (!doctorRecommendation.trim()) return;
     setSendingOrder(true);
+    setOrderError('');
     try {
       const activeDocName = patient?.doctorName || 'د/ عمار محمود';
       const orderPayload = {
@@ -139,7 +141,7 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
       setTimeout(() => setOrderSentSuccess(false), 4000);
     } catch (e) {
       console.error('Error sending doctor order:', e);
-      alert('حدث خطأ أثناء إرسال التوصية.');
+      setOrderError('حدث خطأ أثناء إرسال التوصية، يرجى المحاولة مرة أخرى.');
     } finally {
       setSendingOrder(false);
     }
@@ -377,6 +379,13 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
               <p className="text-[11px] text-emerald-700 font-bold flex items-center gap-1">
                 <CheckCircle2 size={14} />
                 <span>تم إرسال التوصية الطبية بنجاح لهاتف المريض وتم توثيقها بالملف!</span>
+              </p>
+            )}
+
+            {orderError && (
+              <p className="text-[11px] text-rose-700 font-bold flex items-center gap-1">
+                <AlertTriangle size={14} />
+                <span>{orderError}</span>
               </p>
             )}
           </div>

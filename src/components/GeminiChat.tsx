@@ -1,10 +1,36 @@
-import React, {useState, useRef, useEffect} from 'react';
-import {Sparkles, X, Send, RotateCcw, ChevronDown, Bot, HeartPulse, UserCheck, Check, Copy, Activity, ShieldCheck, Stethoscope, Lock} from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  Sparkles,
+  X,
+  Send,
+  RotateCcw,
+  ChevronDown,
+  Bot,
+  HeartPulse,
+  UserCheck,
+  Check,
+  Copy,
+  ShieldCheck,
+  Stethoscope,
+  Lock,
+  BookOpen,
+  Quote,
+  Ban
+} from 'lucide-react';
+import { CitationEvidence, KnowledgeSettings, KnowledgeSource } from '../types/knowledge';
+import {
+  retrieveRelevantChunks,
+  getKnowledgeSettings,
+  subscribeToKnowledgeSources,
+  DEFAULT_KNOWLEDGE_SETTINGS
+} from '../lib/knowledgeBase';
 
 interface ChatMessage {
   role: 'user' | 'model';
   text: string;
   time?: string;
+  citations?: CitationEvidence[];
+  refused?: boolean;
 }
 
 export interface PatientContext {
@@ -32,20 +58,40 @@ interface Props {
 }
 
 const GENERAL_PROMPTS = [
-  'توصيات إرشادات ESC 2024 لعلاج ضغط الدم المرتفع (Stage 2)',
+  'توصيات علاج ضغط الدم المرتفع (Stage 2) وفق المراجع المرفوعة',
   'الجرعات الآمنة لحاصرات بيتا في مرضى قصور عضلة القلب (HFrEF)',
   'احتياطات الجمع بين مضادات التجلط والأسبرين بعد القسطرة',
   'قواعد تعديل جرعات أدوية القلب وفق وظائف الكلى و eGFR'
 ];
 
-export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlocked = false, aiBlockedReason}: Props) {
+export default function GeminiChat({
+  patientContext,
+  externalOpenTrigger,
+  isAiBlocked = false,
+  aiBlockedReason
+}: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([]);
+  const [knowledgeSettings, setKnowledgeSettings] = useState<KnowledgeSettings>(DEFAULT_KNOWLEDGE_SETTINGS);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const unsub = subscribeToKnowledgeSources(setKnowledgeSources);
+    getKnowledgeSettings().then(setKnowledgeSettings);
+    return () => unsub();
+  }, []);
+
+  // Refresh settings whenever drawer opens
+  useEffect(() => {
+    if (isOpen) {
+      getKnowledgeSettings().then(setKnowledgeSettings);
+    }
+  }, [isOpen]);
 
   // If external open trigger changes, auto open
   useEffect(() => {
@@ -55,7 +101,7 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
   }, [externalOpenTrigger]);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({behavior: 'smooth'});
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
@@ -65,16 +111,19 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
     }
   }, [isOpen, messages, loading]);
 
-  const latestVital = patientContext?.vitals && patientContext.vitals.length > 0
-    ? patientContext.vitals[patientContext.vitals.length - 1]
-    : null;
+  const latestVital =
+    patientContext?.vitals && patientContext.vitals.length > 0
+      ? patientContext.vitals[patientContext.vitals.length - 1]
+      : null;
+
+  const activeSourcesCount = knowledgeSources.filter((s) => s.isActive).length;
 
   const dynamicPrompts = patientContext?.name
     ? [
-        `قيّم حالة ${patientContext.name} بناءً على آخر قراءة ضغط (${latestVital ? `${latestVital.systolic}/${latestVital.diastolic}` : 'المسجلة'}) وسجل أدويته`,
-        `هل توجد أي تعارضات دوائية في أدوية ${patientContext.name} الحالية؟`,
-        `ما هو التعديل العلاجي المقترح لضبط ضغط دم ${patientContext.name} وخفض الخطورة؟`,
-        `ما هي الفحوصات والتحاليل الدورية القادمة الموصى بها لحالته؟`
+        `قيّم حالة ${patientContext.name} بناءً على آخر قراءة ضغط (${latestVital ? `${latestVital.systolic}/${latestVital.diastolic}` : 'المسجلة'}) والمراجع المعتمدة`,
+        `هل توجد أي تعارضات دوائية في أدوية ${patientContext.name} الحالية مع الدليل المرجعي؟`,
+        `ما هو التعديل العلاجي المقترح لضبط ضغط دم ${patientContext.name} وفق المراجع المرفوعة؟`,
+        `ما هي الفحوصات والتحاليل الدورية الموصى بها لحالته؟`
       ]
     : GENERAL_PROMPTS;
 
@@ -82,16 +131,17 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
     const messageContent = (textToSend ?? input).trim();
     if (!messageContent || loading) return;
 
-    const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     if (isAiBlocked) {
-      setMessages(prev => [
+      setMessages((prev) => [
         ...prev,
-        {role: 'user', text: messageContent, time},
+        { role: 'user', text: messageContent, time },
         {
           role: 'model',
           text: `⚠️ تعذر إجراء الاستعلام الذكي!\n\n${aiBlockedReason || 'تم حظر خدمة الذكاء الاصطناعي لهذه العيادة أو استنفاد الكوتة الشهرية المحددة من قبل المشرف العام (Super Admin).'}\n\nيرجى التواصل مع إدارة المنظومة لرفع الحظر أو تزويد رصيد الاستعلامات.`,
-          time
+          time,
+          refused: true
         }
       ]);
       if (!textToSend) setInput('');
@@ -100,7 +150,7 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
 
     const newMessages: ChatMessage[] = [
       ...messages,
-      {role: 'user', text: messageContent, time}
+      { role: 'user', text: messageContent, time }
     ];
 
     setMessages(newMessages);
@@ -108,48 +158,61 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
     setLoading(true);
 
     try {
+      // Retrieve top relevant page excerpts from uploaded Admin PDF/TXT sources
+      const [retrievalResult, latestSettings] = await Promise.all([
+        retrieveRelevantChunks(messageContent, 7),
+        getKnowledgeSettings()
+      ]);
+
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          history: newMessages.map(m => ({
+          history: newMessages.map((m) => ({
             role: m.role,
-            parts: [{text: m.text}]
+            parts: [{ text: m.text }]
           })),
           message: messageContent,
-          patientContext: patientContext ? {
-            id: patientContext.id,
-            name: patientContext.name,
-            dob: patientContext.dob,
-            age: patientContext.age,
-            diagnosis: patientContext.diagnosis,
-            riskTier: patientContext.riskTier,
-            status: patientContext.status,
-            vitals: patientContext.vitals?.slice(-7) || [],
-            medications: patientContext.medications || [],
-            labs: patientContext.labs,
-            echo: patientContext.echo
-          } : undefined
+          retrievedChunks: retrievalResult.chunks,
+          knowledgeSettings: latestSettings,
+          activeSourceCount: retrievalResult.activeSourceCount,
+          patientContext: patientContext
+            ? {
+                id: patientContext.id,
+                name: patientContext.name,
+                dob: patientContext.dob,
+                age: patientContext.age,
+                diagnosis: patientContext.diagnosis,
+                riskTier: patientContext.riskTier,
+                status: patientContext.status,
+                vitals: patientContext.vitals?.slice(-7) || [],
+                medications: patientContext.medications || [],
+                labs: patientContext.labs,
+                echo: patientContext.echo
+              }
+            : undefined
         })
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to get response');
-      }
-
       const data = await response.json();
-      const replyTime = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+      const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setMessages([
         ...newMessages,
-        {role: 'model', text: data.response || 'تم استلام الاستشارة ولكن لم يتم إنشاء نص.', time: replyTime}
+        {
+          role: 'model',
+          text: data.response || 'تم استلام الاستشارة ولكن لم يتم إنشاء نص.',
+          time: replyTime,
+          citations: Array.isArray(data.citations) ? data.citations : [],
+          refused: Boolean(data.refused)
+        }
       ]);
-    } catch (e) {
+    } catch {
       setMessages([
         ...newMessages,
         {
           role: 'model',
           text: '⚠️ تعذر الاتصال بمحرك الذكاء الاصطناعي السريري. يرجى التحقق من الخادم وإعادة المحاولة.',
-          time: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
     } finally {
@@ -178,7 +241,7 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
     <>
       {/* Floating Chat Drawer Window */}
       {isOpen && (
-        <div className="fixed bottom-24 right-4 sm:right-6 z-50 w-[94vw] sm:w-[460px] h-[600px] max-h-[85vh] bg-white rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-200 font-sans">
+        <div className="fixed bottom-24 right-4 sm:right-6 z-50 w-[94vw] sm:w-[480px] h-[620px] max-h-[85vh] bg-white rounded-3xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-200 font-sans">
           {/* Header */}
           <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 text-white p-4 flex items-center justify-between select-none shadow-sm">
             <div className="flex items-center gap-3">
@@ -190,8 +253,13 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
                   <h3 className="font-bold text-sm tracking-wide">Cardios AI Clinical Assistant</h3>
                   <span className="w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-emerald-300/40 animate-ping" />
                 </div>
-                <p className="text-[11px] text-blue-100/90 flex items-center gap-1 font-normal">
-                  مساعد طبيب القلب • إرشادات ESC & AHA السريرية
+                <p className="text-[11px] text-blue-100/90 flex items-center gap-1.5 font-normal">
+                  <BookOpen size={11} className="text-teal-300" />
+                  <span>
+                    {knowledgeSettings.strictKnowledgeOnly
+                      ? `مقيد بالمصادر (${activeSourcesCount} مرجع) • بالدليل ورقم الصفحة`
+                      : 'مساعد طبيب القلب • إرشادات ESC & AHA'}
+                  </span>
                 </p>
               </div>
             </div>
@@ -215,7 +283,7 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
             </div>
           </div>
 
-          {/* Active Patient Context Clinical Banner or Blocked Warning Banner */}
+          {/* Active Patient Context Clinical Banner or Knowledge Guardrail Banner */}
           {isAiBlocked ? (
             <div className="bg-red-50 border-b border-red-200 p-3 text-xs text-red-900 flex items-start gap-2.5" dir="rtl">
               <ShieldCheck size={18} className="text-red-600 shrink-0 mt-0.5" />
@@ -240,25 +308,24 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
                         آخر ضغط: {latestVital.systolic}/{latestVital.diastolic}
                       </span>
                     )}
-                    {patientContext.ef && (
-                      <span>• كفاءة القلب: {patientContext.ef}%</span>
-                    )}
-                    {patientContext.medications && (
-                      <span>• {patientContext.medications.length} أدوية</span>
-                    )}
+                    {patientContext.ef && <span>• كفاءة القلب: {patientContext.ef}%</span>}
+                    {patientContext.medications && <span>• {patientContext.medications.length} أدوية</span>}
                   </div>
                 </div>
               </div>
               <span className="text-[10px] bg-emerald-200/80 text-emerald-900 font-bold px-2 py-0.5 rounded-full shrink-0 flex items-center gap-1">
-                <ShieldCheck size={12} className="text-emerald-700" />
-                ملم بالحالة
+                <BookOpen size={11} className="text-emerald-700" />
+                {activeSourcesCount} مصادر
               </span>
             </div>
           ) : (
-            <div className="bg-slate-100 border-b border-slate-200 px-4 py-2 text-xs text-slate-600 flex items-center justify-between" dir="rtl">
-              <span className="flex items-center gap-1.5">
-                <Stethoscope size={14} className="text-blue-600" />
-                استشارة عامة في أمراض القلب والبروتوكولات السريرية
+            <div className="bg-slate-100 border-b border-slate-200 px-4 py-2 text-xs text-slate-700 flex items-center justify-between" dir="rtl">
+              <span className="flex items-center gap-1.5 font-medium">
+                <Stethoscope size={14} className="text-teal-600" />
+                استشارة قلبية موثقة من المصادر المعتمدة فقط
+              </span>
+              <span className="text-[10px] font-bold bg-teal-100 text-teal-800 px-2 py-0.5 rounded-full">
+                {activeSourcesCount} مراجع نشطة
               </span>
             </div>
           )}
@@ -279,9 +346,6 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
                 <div className="p-3 bg-red-50 border border-red-200 rounded-2xl text-[11px] text-red-800 font-mono font-bold">
                   الحالة: AI Blocked by Super Admin
                 </div>
-                <p className="text-[11px] text-slate-400 max-w-xs">
-                  يرجى مراجعة إدارة المنظومة لترقية الباقة أو إلغاء الحظر الإداري للاستعلامات السريرية.
-                </p>
               </div>
             ) : messages.length === 0 ? (
               <div className="h-full flex flex-col justify-center text-center p-2">
@@ -289,17 +353,17 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
                   <HeartPulse size={28} className="text-blue-600 animate-pulse" />
                 </div>
                 <h4 className="font-bold text-slate-800 text-base mb-1">
-                  {patientContext?.name ? `استشارة سريرية فورية لـ ${patientContext.name}` : 'استشارة الذكاء الاصطناعي السريرية'}
+                  {patientContext?.name ? `استشارة سريرية موثقة لـ ${patientContext.name}` : 'المساعد القلبي الموثق بالمراجع'}
                 </h4>
                 <p className="text-xs text-slate-500 mb-4 max-w-sm mx-auto leading-relaxed">
-                  {patientContext?.name
-                    ? 'الذكاء الاصطناعي ملم ببيانات المريض الحالية (تاريخ الضغط، الأدوية، والتشخيص). يمكنك سؤاله مباشرة دون إعادة شرح الحالة.'
+                  {knowledgeSettings.strictKnowledgeOnly
+                    ? `مضبوط للإجابة حصرياً في أمراض القلب ومن المراجع المرفوعة في لوحة الأدمن (${activeSourcesCount} مرجع) بالدليل ورقم الصفحة.`
                     : 'اسأل عن بروتوكولات القلب، التعارضات الدوائية، وإرشادات علاج قصور الشرايين وارتفاع الضغط.'}
                 </p>
 
                 <div className="space-y-2 text-right">
                   <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider px-1">
-                    أسئلة مقترحة للحالة:
+                    أسئلة مقترحة:
                   </p>
                   {dynamicPrompts.map((prompt, idx) => (
                     <button
@@ -317,22 +381,31 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
               messages.map((m, i) => (
                 <div
                   key={i}
-                  className={`flex flex-col ${
-                    m.role === 'user' ? 'items-start' : 'items-end'
-                  }`}
+                  className={`flex flex-col ${m.role === 'user' ? 'items-start' : 'items-end'}`}
                 >
                   <div
-                    className={`p-3.5 rounded-2xl text-xs sm:text-sm max-w-[90%] leading-relaxed ${
+                    className={`p-3.5 rounded-2xl text-xs sm:text-sm max-w-[92%] leading-relaxed ${
                       m.role === 'user'
                         ? 'bg-blue-600 text-white rounded-tl-xs shadow-xs text-right'
+                        : m.refused
+                        ? 'bg-rose-50 border border-rose-200 text-rose-900 rounded-tr-xs shadow-xs text-right'
                         : 'bg-white border border-slate-200 text-slate-800 rounded-tr-xs shadow-xs text-right'
                     }`}
                   >
                     {m.role === 'model' && (
                       <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-indigo-700 mb-2 pb-1.5 border-b border-slate-100">
                         <div className="flex items-center gap-1.5">
-                          <Bot size={14} className="text-indigo-600" />
-                          <span>Cardios AI Clinical Advice</span>
+                          {m.refused ? (
+                            <>
+                              <Ban size={14} className="text-rose-600" />
+                              <span className="text-rose-700">خارج النطاق المسموح (تخصص القلب والمصادر)</span>
+                            </>
+                          ) : (
+                            <>
+                              <Bot size={14} className="text-indigo-600" />
+                              <span>Cardios Evidence AI</span>
+                            </>
+                          )}
                         </div>
                         <button
                           onClick={() => handleCopy(m.text, i)}
@@ -353,12 +426,42 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
                         </button>
                       </div>
                     )}
+
                     <div className="whitespace-pre-wrap font-sans">{m.text}</div>
+
+                    {/* Evidence & Page Number Cards */}
+                    {m.role === 'model' && m.citations && m.citations.length > 0 && (
+                      <div className="mt-3 pt-2.5 border-t border-slate-100 space-y-2">
+                        <div className="text-[10px] font-black text-teal-800 flex items-center gap-1">
+                          <BookOpen size={12} className="text-teal-600" />
+                          <span>الأدلة وأرقام الصفحات من المراجع المعتمدة:</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {m.citations.map((cit, cIdx) => (
+                            <div
+                              key={cIdx}
+                              className="bg-teal-50/70 border border-teal-200/80 rounded-xl p-2 text-[11px] space-y-1"
+                            >
+                              <div className="flex items-center justify-between gap-2 font-bold text-teal-950">
+                                <span className="truncate">{cit.sourceTitle}</span>
+                                <span className="shrink-0 bg-teal-600 text-white px-2 py-0.5 rounded-md font-mono text-[10px]">
+                                  صفحة {cit.pageNumber}
+                                </span>
+                              </div>
+                              {cit.quote && (
+                                <p className="text-[10px] text-slate-600 flex items-start gap-1 leading-relaxed">
+                                  <Quote size={10} className="shrink-0 mt-0.5 text-teal-600" />
+                                  <span>"{cit.quote}"</span>
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {m.time && (
-                    <span className="text-[10px] text-slate-400 mt-1 px-1 font-mono">
-                      {m.time}
-                    </span>
+                    <span className="text-[10px] text-slate-400 mt-1 px-1 font-mono">{m.time}</span>
                   )}
                 </div>
               ))
@@ -367,7 +470,7 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
             {loading && (
               <div className="flex items-center gap-2.5 p-3.5 bg-white border border-slate-200 rounded-2xl rounded-tr-xs w-fit text-xs text-slate-600 shadow-xs">
                 <Sparkles size={16} className="text-blue-600 animate-spin" />
-                <span>Cardios AI يقوم بتحليل سجل المريض وفق إرشادات القلب...</span>
+                <span>جاري البحث في المراجع المرفوعة واستخراج رقم الصفحة والدليل...</span>
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -390,7 +493,11 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
                   onKeyDown={handleKeyDown}
                   disabled={loading}
                   className="flex-1 px-3.5 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all disabled:opacity-60 text-right"
-                  placeholder={patientContext?.name ? `اسأل عن علاج أو خطة ${patientContext.name}...` : "اسأل عن إرشادات علاج القلب، الجرعات، والتعارضات..."}
+                  placeholder={
+                    patientContext?.name
+                      ? `اسأل عن علاج ${patientContext.name} وفق المراجع...`
+                      : 'اسأل في أمراض القلب أو المراجع المرفوعة...'
+                  }
                 />
                 <button
                   onClick={() => handleSendMessage()}
@@ -403,7 +510,11 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
               </div>
             )}
             <p className="text-[10px] text-slate-400 text-center mt-2">
-              {isAiBlocked ? 'الحظر مفعل من إدارة المنظومة (Super Admin Governance)' : 'مساعد طبيب القلب الذكي • داعم للقرار السريري وفق أحدث المعايير الطبية'}
+              {isAiBlocked
+                ? 'الحظر مفعل من إدارة المنظومة (Super Admin Governance)'
+                : knowledgeSettings.strictCardiologyOnly
+                ? 'مقيد بتخصص أمراض القلب والمصادر المرفوعة فقط • مع توثيق رقم الصفحة'
+                : 'مساعد طبيب القلب الذكي • داعم للقرار السريري'}
             </p>
           </div>
         </div>
@@ -417,12 +528,18 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
             isOpen
               ? 'bg-slate-900 hover:bg-black ring-4 ring-slate-300/50'
               : isAiBlocked
-                ? 'bg-gradient-to-r from-red-600 to-rose-700 ring-4 ring-red-400/40 shadow-red-500/30'
-                : patientContext?.name
-                ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-700 hover:from-emerald-700 hover:to-blue-800 ring-4 ring-emerald-400/40 shadow-emerald-500/30'
-                : 'bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 ring-4 ring-blue-400/30 shadow-blue-500/30'
+              ? 'bg-gradient-to-r from-red-600 to-rose-700 ring-4 ring-red-400/40 shadow-red-500/30'
+              : patientContext?.name
+              ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-700 hover:from-emerald-700 hover:to-blue-800 ring-4 ring-emerald-400/40 shadow-emerald-500/30'
+              : 'bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 ring-4 ring-blue-400/30 shadow-blue-500/30'
           }`}
-          title={isOpen ? 'إغلاق مساعد الذكاء الاصطناعي' : isAiBlocked ? 'مساعد الذكاء الاصطناعي (موقف)' : 'فتح مساعد القلب الذكي'}
+          title={
+            isOpen
+              ? 'إغلاق مساعد الذكاء الاصطناعي'
+              : isAiBlocked
+              ? 'مساعد الذكاء الاصطناعي (موقف)'
+              : 'فتح مساعد القلب الذكي'
+          }
           aria-label="Cardiology AI Assistant"
         >
           {isOpen ? (
@@ -438,16 +555,18 @@ export default function GeminiChat({patientContext, externalOpenTrigger, isAiBlo
                 ) : (
                   <Sparkles size={20} className="text-amber-300 animate-pulse" />
                 )}
-                <span className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${
-                  isAiBlocked ? 'bg-amber-300 ring-2 ring-red-700' : 'bg-emerald-400 ring-2 ring-blue-600 animate-ping'
-                }`} />
+                <span
+                  className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${
+                    isAiBlocked ? 'bg-amber-300 ring-2 ring-red-700' : 'bg-emerald-400 ring-2 ring-blue-600 animate-ping'
+                  }`}
+                />
               </div>
               <span className="text-xs font-bold tracking-wide">
                 {isAiBlocked
                   ? 'الـ AI موقف إدارياً'
                   : patientContext?.name
                   ? `AI: ${patientContext.name}`
-                  : 'مساعد القلب الذكي (AI)'}
+                  : 'مساعد القلب الموثق (AI)'}
               </span>
             </>
           )}

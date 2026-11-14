@@ -19,6 +19,7 @@ export default function ClinicScheduleModal({
   onClose,
   doctorId = 'doc-1',
   doctorName = 'د/ عمار محمود',
+  clinicName,
   clinicCode = 'CLINIC-AMMAR-101',
   onSaveSuccess
 }: {
@@ -26,26 +27,35 @@ export default function ClinicScheduleModal({
   onClose: () => void;
   doctorId?: string;
   doctorName?: string;
+  clinicName?: string;
   clinicCode?: string;
   onSaveSuccess?: () => void;
 }) {
   const [workingDays, setWorkingDays] = useState<DoctorWorkingDay[]>(DEFAULT_DAYS);
+  const [resolvedClinicName, setResolvedClinicName] = useState<string>(
+    clinicName || (doctorId === 'doc-1' ? 'عيادة أمراض القلب والقسطرة' : `عيادة ${doctorName}`)
+  );
   const [instructions, setInstructions] = useState<string>(
     'يرجى التواجد بالعيادة قبل موعد الدور بـ 15 دقيقة مع إحضار كافة الفحوصات والتحاليل الطبية السابقة.'
   );
   const [loading, setLoading] = useState<boolean>(true);
   const [saving, setSaving] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string>('');
 
   useEffect(() => {
     if (!isOpen) return;
 
     const fetchSchedule = async () => {
       setLoading(true);
+      setSaveError('');
       try {
         const snap = await getDoc(doc(db, 'doctor_schedules', doctorId));
         if (snap.exists()) {
           const data = snap.data() as DoctorScheduleSettings;
+          if (data.clinicName) {
+            setResolvedClinicName(data.clinicName);
+          }
           if (data.workingDays && data.workingDays.length > 0) {
             setWorkingDays(data.workingDays);
           }
@@ -86,12 +96,13 @@ export default function ClinicScheduleModal({
   const handleSave = async () => {
     setSaving(true);
     setSavedSuccess(false);
+    setSaveError('');
 
     try {
       const scheduleData: DoctorScheduleSettings = {
         doctorId,
         doctorName,
-        clinicName: 'عيادة أمراض القلب والقسطرة',
+        clinicName: resolvedClinicName,
         clinicCode,
         workingDays,
         instructions,
@@ -108,7 +119,7 @@ export default function ClinicScheduleModal({
       }, 800);
     } catch (err) {
       console.error('Error saving doctor schedule:', err);
-      alert('حدث خطأ أثناء حفظ جدول المواعيد، يرجى المحاولة مرة أخرى.');
+      setSaveError('حدث خطأ أثناء حفظ جدول المواعيد، يرجى المحاولة مرة أخرى.');
     } finally {
       setSaving(false);
     }
@@ -138,6 +149,11 @@ export default function ClinicScheduleModal({
 
         {/* Content Body */}
         <div className="p-5 overflow-y-auto space-y-6 flex-1">
+          {saveError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-700">
+              {saveError}
+            </div>
+          )}
           {loading ? (
             <div className="py-12 text-center text-slate-400 text-xs flex flex-col items-center gap-2">
               <RefreshCw size={24} className="animate-spin text-amber-600" />

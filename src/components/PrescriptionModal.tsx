@@ -6,6 +6,9 @@ import PrintableMedicalDocument from './PrintableMedicalDocument';
 
 interface Props {
   onClose: () => void;
+  doctorId?: string;
+  doctorName?: string;
+  clinicName?: string;
 }
 
 interface Medication {
@@ -32,7 +35,12 @@ const CARDIOLOGY_DRUGS = [
   {name: 'Rivaroxaban (Xarelto)', dosage: '20 mg', instructions: 'Take 1 tablet daily with dinner', duration: 'Ongoing'}
 ];
 
-export default function PrescriptionModal({onClose}: Props) {
+export default function PrescriptionModal({
+  onClose,
+  doctorId = 'doc-1',
+  doctorName = 'د/ عمار محمود',
+  clinicName = 'عيادة أمراض القلب والقسطرة'
+}: Props) {
   const [patients, setPatients] = useState<{id: string; name: string}[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<{id: string; name: string} | null>(null);
   const [medications, setMedications] = useState<Medication[]>([
@@ -48,27 +56,39 @@ export default function PrescriptionModal({onClose}: Props) {
   const [doctorNotes, setDoctorNotes] = useState('Low salt diet. Monitor home blood pressure daily. Repeat lipid profile in 3 months.');
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [showPrintModal, setShowPrintModal] = useState(false);
 
   useEffect(() => {
     const fetchPatients = async () => {
       try {
         const snap = await getDocs(collection(db, 'patients'));
-        const list = snap.docs.map(d => ({id: d.id, name: d.data().name || 'Patient ' + d.id}));
+        const list = snap.docs
+          .filter((d) => {
+            const pDocId = d.data().doctorId;
+            return pDocId ? pDocId === doctorId : doctorId === 'doc-1';
+          })
+          .map(d => ({id: d.id, name: d.data().name || 'Patient ' + d.id}));
         setPatients(list);
         if (list.length > 0) setSelectedPatient(list[0]);
+        else setSelectedPatient(null);
       } catch (e) {
-        const fallback = [
-          {id: '1', name: 'Ahmed Hassan'},
-          {id: '2', name: 'Fatma Ali'},
-          {id: '3', name: 'Mohamed Ibrahim'},
-        ];
-        setPatients(fallback);
-        setSelectedPatient(fallback[0]);
+        if (doctorId === 'doc-1' || doctorId === 'doc-2') {
+          const fallback = [
+            {id: '1', name: 'Ahmed Hassan'},
+            {id: '2', name: 'Fatma Ali'},
+            {id: '3', name: 'Mohamed Ibrahim'},
+          ];
+          setPatients(fallback);
+          setSelectedPatient(fallback[0]);
+        } else {
+          setPatients([]);
+          setSelectedPatient(null);
+        }
       }
     };
     fetchPatients();
-  }, []);
+  }, [doctorId]);
 
   const handleSelectDrugSuggestion = (drug: typeof CARDIOLOGY_DRUGS[0]) => {
     setSearchDrug(drug.name);
@@ -100,40 +120,38 @@ export default function PrescriptionModal({onClose}: Props) {
   const handleSaveToEHR = async () => {
     if (!selectedPatient) return;
     setSaving(true);
+    setSaveError('');
     try {
       await addDoc(collection(db, 'patients', selectedPatient.id, 'prescriptions'), {
         medications,
         notes: doctorNotes,
         patientName: selectedPatient.name,
+        doctorName,
         createdAt: new Date().toISOString()
       });
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
-    } catch (e) {
-      alert('Failed to save prescription.');
+    } catch {
+      setSaveError('تعذر حفظ الروشتة، يرجى المحاولة مرة أخرى.');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleWhatsAppSend = () => {
-    if (!selectedPatient) return;
-    const medsList = medications.map((m, idx) => `${idx + 1}. *${m.name}* (${m.dosage})\n   └ ${m.instructions} [لمدة: ${m.duration}]`).join('\n\n');
-    const message = `*روشتة علاجية إلكترونية - Cardios Clinic* 🫀
+  const whatsappUrl = selectedPatient
+    ? `https://wa.me/?text=${encodeURIComponent(`*روشتة علاجية إلكترونية - ${clinicName}* 🫀
 👤 *المريض:* ${selectedPatient.name}
 📅 *التاريخ:* ${new Date().toLocaleDateString('ar-EG')}
 
 💊 *الأدوية المقررة:*
-${medsList}
+${medications.map((m, idx) => `${idx + 1}. *${m.name}* (${m.dosage})\n   └ ${m.instructions} [لمدة: ${m.duration}]`).join('\n\n')}
 
 📝 *ملاحظات الطبيب:*
 ${doctorNotes}
 
 ⚠️ برجاء الالتزام بالمواعيد المحددة والجرعات وعدم إيقاف أي علاج دون الرجوع للطبيب المعالج.
-👨‍⚕️ *د. القلب والأوعية الدموية - Cardios*`;
-
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-  };
+👨‍⚕️ *${doctorName} - Cardios*`)}`
+    : '#';
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -164,19 +182,21 @@ ${doctorNotes}
           <div className="flex items-center gap-2">
             <button
               onClick={handleSaveToEHR}
-              disabled={saving}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-all"
+              disabled={saving || !selectedPatient}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg transition-all"
             >
               <Check size={14} />
               <span>{savedSuccess ? 'Saved!' : saving ? 'Saving...' : 'Save to Record'}</span>
             </button>
-            <button
-              onClick={handleWhatsAppSend}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white rounded-lg transition-all"
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white rounded-lg transition-all ${!selectedPatient ? 'pointer-events-none opacity-50' : ''}`}
             >
               <Share2 size={14} />
               <span>Send WhatsApp</span>
-            </button>
+            </a>
             <button
               onClick={() => setShowPrintModal(true)}
               className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all shadow-xs cursor-pointer"
@@ -195,6 +215,11 @@ ${doctorNotes}
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50/70 space-y-6">
+          {saveError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold rounded-xl">
+              {saveError}
+            </div>
+          )}
           {/* Quick Drug Search & Add Box (no-print) */}
           <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-2xs space-y-3 no-print">
             <h3 className="text-xs font-bold text-gray-800 uppercase tracking-wide flex items-center gap-2">
@@ -278,13 +303,13 @@ ${doctorNotes}
             <div className="border-b-2 border-blue-900 pb-4 mb-6 print-header">
               <div className="flex justify-between items-start">
                 <div className="flex items-center gap-3">
-                  <img src="/assets/aistudio/image_54a63720.png" alt="د/ عمار محمود" className="h-14 w-auto object-contain" />
+                  <img src="/assets/aistudio/image_54a63720.png" alt={doctorName} className="h-14 w-auto object-contain" />
                   <div>
-                    <h1 className="text-xl font-black text-blue-900 tracking-tight">عيادة د/ عمار محمود لأمراض القلب والقسطرة</h1>
+                    <h1 className="text-xl font-black text-blue-900 tracking-tight">{clinicName}</h1>
                     <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-0.5">
-                      Consultant of Cardiology & Interventional Angiography
+                      {doctorName} • Cardiology & Interventional Angiography
                     </p>
-                    <p className="text-[11px] text-gray-500">M.D. Cardiology • Cairo, Egypt</p>
+                    <p className="text-[11px] text-gray-500">M.D. Cardiology • Egypt</p>
                   </div>
                 </div>
                 <div className="text-right">
@@ -360,13 +385,13 @@ ${doctorNotes}
             {/* Official Signature Footer */}
             <div className="pt-6 border-t border-gray-300 flex justify-between items-end text-xs text-gray-600 print-footer">
               <div>
-                <p className="font-bold text-gray-800">عيادة د/ عمار محمود - روشتة إلكترونية معتمدة</p>
+                <p className="font-bold text-gray-800">{clinicName} - روشتة إلكترونية معتمدة</p>
                 <p className="text-[11px] text-gray-400">Emergency Hotline: 01146963589</p>
               </div>
               <div className="text-right">
                 <p className="text-xs text-gray-400 mb-6">Physician Signature & Stamp:</p>
                 <div className="w-52 border-b-2 border-gray-800 pb-1 text-center font-bold text-gray-900">
-                  د/ عمار محمود
+                  {doctorName}
                 </div>
                 <p className="text-[10px] text-gray-500 mt-1">استشاري أمراض القلب والقسطرة</p>
               </div>
@@ -387,10 +412,10 @@ ${doctorNotes}
             heartRate: 74,
             medications: medications,
             doctorNotes: doctorNotes,
-            doctorName: 'أ.د. عمار محمود',
+            doctorName: doctorName,
             doctorSpecialty: 'استشاري أمراض القلب والأوعية الدموية والقسطرة التداخلية',
-            clinicName: 'مركز CARDIOS التخصصي لأمراض القلب',
-            licenseNumber: 'ترخيص نقابة الأطباء رقم: 104825 / ج.م.ع'
+            clinicName: clinicName,
+            licenseNumber: 'ترخيص نقابة الأطباء المعتمد / ج.م.ع'
           }}
           onClose={() => setShowPrintModal(false)}
         />

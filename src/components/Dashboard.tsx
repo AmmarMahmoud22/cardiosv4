@@ -24,7 +24,8 @@ import {
   HeartPulse,
   Building2,
   Sparkles,
-  Calculator
+  Calculator,
+  User
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useLanguage, LanguageSwitcher } from '../context/LanguageContext';
@@ -41,6 +42,7 @@ import CardiologyReport from './CardiologyReport';
 import DoctorAnalyticsPanel from './DoctorAnalyticsPanel';
 import DoctorSettingsModal from './DoctorSettingsModal';
 import ClinicalCalculatorsModal from './ClinicalCalculatorsModal';
+import UserProfileModal from './UserProfileModal';
 import { DoctorScheduleSettings } from '../types/appointment';
 
 const PRESET_DOCTORS = [
@@ -95,6 +97,7 @@ export default function Dashboard({
   const [showReportsModal, setShowReportsModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showClinicalCalculators, setShowClinicalCalculators] = useState(false);
+  const [showUserProfileModal, setShowUserProfileModal] = useState(false);
   const [clinicDrawerOpen, setClinicDrawerOpen] = useState(false);
 
   // Doctor account status & AI governance
@@ -112,30 +115,66 @@ export default function Dashboard({
     completedAppointments: 0
   });
 
+  const [doctorEmail, setDoctorEmail] = useState<string>('');
+  const [doctorPhone, setDoctorPhone] = useState<string>('');
+  const [doctorPatients, setDoctorPatients] = useState<Array<{ id: string; name: string }>>([]);
+  const [patientsRefreshKey, setPatientsRefreshKey] = useState<number>(0);
+
+  // Sync props when switching logged-in doctor accounts without unmounting
+  useEffect(() => {
+    setCurrentDoctorId(initialDoctorId);
+    setCurrentDoctorName(initialDoctorName);
+    setCurrentClinicCode(initialClinicCode);
+    const preset = PRESET_DOCTORS.find((d) => d.id === initialDoctorId);
+    setCurrentClinicName(preset ? preset.clinicName : `عيادة ${initialDoctorName}`);
+    setCurrentSpecialty(preset ? preset.specialty : 'استشاري أمراض القلب');
+    setDoctorEmail(preset ? `${preset.clinicCode.toLowerCase()}@cardios.eg` : '');
+    setDoctorPhone('');
+    setSelectedPatientId(null);
+    setDoctorStatus('active');
+    setActiveTab('patients');
+  }, [initialDoctorId, initialDoctorName, initialClinicCode]);
+
   // Direct Lab Messages State
   const [newMessageText, setNewMessageText] = useState('');
-  const [messagesList, setMessagesList] = useState([
-    {
-      id: 'm1',
-      sender: 'معمل النيل التخصصي للتحاليل',
-      role: 'lab',
-      time: 'منذ 10 دقائق',
-      patientName: 'أحمد حسن (#1)',
-      text: 'تم رفع نتيجة تحليل Lipid Profile كاملة. الكوليسترول الكلي 240 mg/dL (مرتفع نسبياً).',
-      urgent: true
-    },
-    {
-      id: 'm2',
-      sender: 'نظام المراقبة المنزلية (RPM)',
-      role: 'system',
-      time: 'منذ ساعة',
-      patientName: 'فاطمة علي (#2)',
-      text: 'تنبيه: سجلت المريضة قراءة ضغط دم 155/95 mmHg مع نبض 92. تم إرسال توصية بمراجعة الجرعة.',
-      urgent: true
-    }
-  ]);
+  const [messagesList, setMessagesList] = useState<Array<{
+    id: string;
+    sender: string;
+    role: string;
+    time: string;
+    patientName: string;
+    text: string;
+    urgent: boolean;
+  }>>([]);
 
   const isDemoSession = currentDoctorId === 'doc-1' || currentDoctorId === 'doc-2';
+
+  useEffect(() => {
+    if (isDemoSession) {
+      setMessagesList([
+        {
+          id: 'm1',
+          sender: 'معمل النيل التخصصي للتحاليل',
+          role: 'lab',
+          time: 'منذ 10 دقائق',
+          patientName: 'أحمد حسن (#1)',
+          text: 'تم رفع نتيجة تحليل Lipid Profile كاملة. الكوليسترول الكلي 240 mg/dL (مرتفع نسبياً).',
+          urgent: true
+        },
+        {
+          id: 'm2',
+          sender: 'نظام المراقبة المنزلية (RPM)',
+          role: 'system',
+          time: 'منذ ساعة',
+          patientName: 'فاطمة علي (#2)',
+          text: 'تنبيه: سجلت المريضة قراءة ضغط دم 155/95 mmHg مع نبض 92. تم إرسال توصية بمراجعة الجرعة.',
+          urgent: true
+        }
+      ]);
+    } else {
+      setMessagesList([]);
+    }
+  }, [isDemoSession, currentDoctorId]);
 
   // Real-time listener for current doctor schedule & logo settings
   useEffect(() => {
@@ -176,6 +215,12 @@ export default function Dashboard({
     const unsubDoc = onSnapshot(doc(db, 'doctors', currentDoctorId), (snap) => {
       if (snap.exists()) {
         const d = snap.data();
+        if (d.name) setCurrentDoctorName(d.name);
+        if (d.clinicName) setCurrentClinicName(d.clinicName);
+        if (d.specialty) setCurrentSpecialty(d.specialty);
+        if (d.clinicCode) setCurrentClinicCode(d.clinicCode);
+        if (d.email) setDoctorEmail(d.email);
+        if (d.phone) setDoctorPhone(d.phone);
         if (d.status) {
           setDoctorStatus(d.status);
           localStorage.setItem(`cardios_doctor_status_${currentDoctorId}`, d.status);
@@ -194,40 +239,42 @@ export default function Dashboard({
     return () => unsubDoc();
   }, [currentDoctorId]);
 
-  // Fetch real statistics
+  // Fetch doctor patients & real statistics
   useEffect(() => {
-    if (isDemoSession) return;
-
-    const fetchDoctorStats = async () => {
+    const fetchDoctorPatientsAndStats = async () => {
       try {
         const pSnap = await getDocs(collection(db, 'patients'));
         const docPatients = pSnap.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter((p: any) => p.doctorId === currentDoctorId);
+          .filter((p: any) => p.doctorId ? p.doctorId === currentDoctorId : currentDoctorId === 'doc-1');
 
-        const activeCount = docPatients.length;
-        const labCount = docPatients.filter((p: any) => p.status?.includes('تحاليل') || p.status?.includes('فحص')).length;
-        const alertsCount = docPatients.filter((p: any) => p.status?.includes('تنبيه') || (p.ef && p.ef < 40)).length;
+        setDoctorPatients(docPatients.map((p: any) => ({ id: p.id, name: p.name || `مريض #${p.id}` })));
 
-        const aSnap = await getDocs(collection(db, 'appointments'));
-        const docAppointments = aSnap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .filter((a: any) => a.doctorId === currentDoctorId);
+        if (!isDemoSession) {
+          const activeCount = docPatients.length;
+          const labCount = docPatients.filter((p: any) => p.status?.includes('تحاليل') || p.status?.includes('فحص')).length;
+          const alertsCount = docPatients.filter((p: any) => p.status?.includes('تنبيه') || (p.ef && p.ef < 40)).length;
 
-        setRealStats({
-          activePatients: activeCount,
-          pendingLabs: labCount,
-          rpmAlerts: alertsCount,
-          todayAppointments: docAppointments.length,
-          completedAppointments: docAppointments.filter((a: any) => a.status === 'Completed').length
-        });
+          const aSnap = await getDocs(collection(db, 'appointments'));
+          const docAppointments = aSnap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter((a: any) => a.doctorId === currentDoctorId);
+
+          setRealStats({
+            activePatients: activeCount,
+            pendingLabs: labCount,
+            rpmAlerts: alertsCount,
+            todayAppointments: docAppointments.length,
+            completedAppointments: docAppointments.filter((a: any) => a.status === 'Completed').length
+          });
+        }
       } catch (err) {
         console.error('Error fetching doctor stats:', err);
       }
     };
 
-    fetchDoctorStats();
-  }, [currentDoctorId, isDemoSession, showNewPatient]);
+    fetchDoctorPatientsAndStats();
+  }, [currentDoctorId, isDemoSession, showNewPatient, patientsRefreshKey]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -423,12 +470,16 @@ export default function Dashboard({
             >
               <div className="relative shrink-0">
                 <MessageSquare size={18} className={activeTab === 'messages' ? 'text-purple-600' : 'text-slate-400'} />
-                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                {messagesList.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                )}
               </div>
               {!sidebarCollapsed && (
                 <div className="flex items-center justify-between w-full">
                   <span className="whitespace-nowrap">{t('messages')}</span>
-                  <span className="text-[10px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.2 rounded-full">2</span>
+                  {messagesList.length > 0 && (
+                    <span className="text-[10px] bg-rose-100 text-rose-700 font-bold px-1.5 py-0.2 rounded-full">{messagesList.length}</span>
+                  )}
                 </div>
               )}
             </button>
@@ -559,6 +610,15 @@ export default function Dashboard({
             </button>
 
             <button
+              onClick={() => setShowUserProfileModal(true)}
+              className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+              title="الملف الشخصي وإعدادات الحساب"
+            >
+              <User size={15} className="text-purple-600" />
+              <span>الملف الشخصي</span>
+            </button>
+
+            <button
               onClick={() => setShowNewPatient(true)}
               className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
             >
@@ -627,6 +687,8 @@ export default function Dashboard({
               doctorId={currentDoctorId}
               doctorName={currentDoctorName}
               onOpenNewPatientModal={() => setShowNewPatient(true)}
+              onPatientDeleted={() => setPatientsRefreshKey((k) => k + 1)}
+              refreshKey={patientsRefreshKey}
             />
             <AlertPanel doctorId={currentDoctorId} isDemoSession={isDemoSession} />
           </div>
@@ -653,7 +715,25 @@ export default function Dashboard({
                 فتح نافذة الطباعة الموسعة
               </button>
             </div>
-            <CardiologyReport patientName="أحمد حسن" patientId="1" />
+            {(isDemoSession || doctorPatients.length > 0) ? (
+              <CardiologyReport
+                patientName={doctorPatients[0]?.name || 'أحمد حسن'}
+                patientId={doctorPatients[0]?.id || '1'}
+              />
+            ) : (
+              <div className="py-12 text-center space-y-3 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                <FileText size={32} className="mx-auto text-slate-400" />
+                <p className="text-sm font-bold text-slate-800">لا توجد تقارير مرضى في عيادتك بعد</p>
+                <p className="text-xs text-slate-500">قم بإضافة أول مريض لتتمكن من إصدار وطباعة تقارير القلب والإيكو الخاصة به.</p>
+                <button
+                  onClick={() => setShowNewPatient(true)}
+                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-xl inline-flex items-center gap-1.5"
+                >
+                  <Plus size={14} />
+                  <span>إضافة مريض جديد</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -684,19 +764,25 @@ export default function Dashboard({
             </form>
 
             <div className="space-y-3 pt-2">
-              {messagesList.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`p-4 rounded-2xl border ${
-                    msg.urgent ? 'bg-rose-50/60 border-rose-200/80' : 'bg-slate-50/80 border-slate-200/60'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="font-bold text-xs text-slate-900">{msg.sender} · {msg.time}</span>
-                  </div>
-                  <p className="text-xs text-slate-700 leading-relaxed">{msg.text}</p>
+              {messagesList.length === 0 ? (
+                <div className="p-8 text-center text-xs text-slate-400 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                  لا توجد رسائل أو إشعارات من المعامل في عيادتك حالياً.
                 </div>
-              ))}
+              ) : (
+                messagesList.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`p-4 rounded-2xl border ${
+                      msg.urgent ? 'bg-rose-50/60 border-rose-200/80' : 'bg-slate-50/80 border-slate-200/60'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="font-bold text-xs text-slate-900">{msg.sender} · {msg.time}</span>
+                    </div>
+                    <p className="text-xs text-slate-700 leading-relaxed">{msg.text}</p>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
@@ -716,9 +802,24 @@ export default function Dashboard({
               <h2 className="text-base font-bold text-slate-900">محاكي هاتف المريض التفاعلي</h2>
               <p className="text-xs text-slate-500">معاينة واجهة المريض عند مسح كارت QR الخاص به</p>
             </div>
-            <div className="max-w-md mx-auto">
-              <PatientMobileDashboard patientId="1" isPortalMode={false} />
-            </div>
+            {(isDemoSession || doctorPatients.length > 0) ? (
+              <div className="max-w-md mx-auto">
+                <PatientMobileDashboard patientId={doctorPatients[0]?.id || '1'} isPortalMode={false} />
+              </div>
+            ) : (
+              <div className="py-12 text-center space-y-3 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                <QrCode size={32} className="mx-auto text-slate-400" />
+                <p className="text-sm font-bold text-slate-800">لا يوجد مرضى لمعاينة كارت المتابعة</p>
+                <p className="text-xs text-slate-500">سجل مريضك الأول أولاً لتظهر معاينة تطبيق الهاتف وكود QR الخاص به هنا.</p>
+                <button
+                  onClick={() => setShowNewPatient(true)}
+                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-xl inline-flex items-center gap-1.5"
+                >
+                  <Plus size={14} />
+                  <span>فتح ملف أول مريض</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </main>
@@ -732,15 +833,19 @@ export default function Dashboard({
           onClose={() => setShowNewPatient(false)}
           doctorId={currentDoctorId}
           clinicCode={currentClinicCode}
-          onPatientAdded={(id) => {
-            setSelectedPatientId(id);
-            setShowNewPatient(false);
+          onPatientAdded={() => {
+            setPatientsRefreshKey((k) => k + 1);
           }}
         />
       )}
 
       {showPrescriptionModal && (
-        <PrescriptionModal onClose={() => setShowPrescriptionModal(false)} />
+        <PrescriptionModal
+          onClose={() => setShowPrescriptionModal(false)}
+          doctorId={currentDoctorId}
+          doctorName={currentDoctorName}
+          clinicName={currentClinicName}
+        />
       )}
 
       {showClinicalCalculators && (
@@ -830,6 +935,27 @@ export default function Dashboard({
             </div>
           </div>
         </div>
+      )}
+
+      {/* User Profile Modal */}
+      {showUserProfileModal && (
+        <UserProfileModal
+          isOpen={showUserProfileModal}
+          onClose={() => setShowUserProfileModal(false)}
+          userId={currentDoctorId}
+          userName={currentDoctorName}
+          userEmail={doctorEmail || 'doctor@cardios.eg'}
+          userPhone={doctorPhone || ''}
+          userRole="Cardiologist"
+          clinicWhatsAppNumber={localStorage.getItem('cardios_custom_doctor_phone') || doctorPhone || '01012345678'}
+          onSaveSuccess={(updated) => {
+            if (updated.name) setCurrentDoctorName(updated.name);
+            if (updated.phone) setDoctorPhone(updated.phone);
+            if (updated.clinicWhatsAppNumber) {
+              localStorage.setItem('cardios_custom_doctor_phone', updated.clinicWhatsAppNumber);
+            }
+          }}
+        />
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 import React, {useEffect, useState} from 'react';
-import {collection, getDocs} from 'firebase/firestore';
+import {collection, getDocs, deleteDoc, doc} from 'firebase/firestore';
 import {db} from '../lib/firebase';
-import {Search, User, Heart, AlertTriangle, CheckCircle2, ChevronRight, Stethoscope, Sparkles, Filter} from 'lucide-react';
+import {Search, User, AlertTriangle, CheckCircle2, ChevronRight, Stethoscope, Sparkles, Filter, Trash2} from 'lucide-react';
 import {useLanguage} from '../context/LanguageContext';
 
 interface Patient {
@@ -24,18 +24,23 @@ export default function PatientTable({
   onSelectPatient,
   doctorId = 'doc-1',
   doctorName,
-  onOpenNewPatientModal
+  onOpenNewPatientModal,
+  onPatientDeleted,
+  refreshKey = 0
 }: {
   onSelectPatient: (id: string) => void;
   doctorId?: string;
   doctorName?: string;
   onOpenNewPatientModal?: () => void;
+  onPatientDeleted?: (id: string) => void;
+  refreshKey?: number;
 }) {
-  const { language, direction, isRTL, t } = useLanguage();
+  const { language, direction, isRTL } = useLanguage();
   const [patients, setPatients] = useState<Patient[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [loading, setLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState<Patient | null>(null);
 
   useEffect(() => {
     const fetchPatients = async () => {
@@ -48,7 +53,20 @@ export default function PatientTable({
       }
     };
     fetchPatients();
-  }, []);
+  }, [doctorId, refreshKey]);
+
+  const handleConfirmDeletePatient = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    setPatients((prev) => prev.filter((p) => p.id !== target.id));
+    try {
+      await deleteDoc(doc(db, 'patients', target.id));
+      onPatientDeleted?.(target.id);
+    } catch (err) {
+      console.error('Error deleting patient:', err);
+    }
+  };
 
   // Filter patients by Doctor to ensure strict clinical isolation
   const doctorIsolatedPatients = patients.filter(patient => {
@@ -222,13 +240,23 @@ export default function PatientTable({
                     </span>
                   </td>
                   <td className={`py-3.5 ${isRTL ? 'text-left pl-2' : 'text-right pr-2'}`}>
-                    <button
-                      onClick={() => onSelectPatient(patient.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 font-bold rounded-xl transition-all active:scale-95 text-xs border border-blue-200 hover:border-transparent cursor-pointer"
-                    >
-                      <span>{isRTL ? 'الملف السريري' : 'Clinical Profile'}</span>
-                      <ChevronRight size={14} className={isRTL ? 'transform -scale-x-100' : ''} />
-                    </button>
+                    <div className="inline-flex items-center gap-1.5">
+                      <button
+                        onClick={() => onSelectPatient(patient.id)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 font-bold rounded-xl transition-all active:scale-95 text-xs border border-blue-200 hover:border-transparent cursor-pointer"
+                      >
+                        <span>{isRTL ? 'الملف السريري' : 'Clinical Profile'}</span>
+                        <ChevronRight size={14} className={isRTL ? 'transform -scale-x-100' : ''} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(patient)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                        title={isRTL ? 'حذف ملف المريض' : 'Delete patient'}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -323,14 +351,24 @@ export default function PatientTable({
                 )}
               </div>
 
-              {/* Action Button */}
-              <button
-                onClick={() => onSelectPatient(patient.id)}
-                className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all active:scale-[0.98]"
-              >
-                <span>فتح الملف السريري والروشتة</span>
-                <ChevronRight size={15} className="transform -scale-x-100" />
-              </button>
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onSelectPatient(patient.id)}
+                  className="flex-1 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-xs transition-all active:scale-[0.98]"
+                >
+                  <span>فتح الملف السريري والروشتة</span>
+                  <ChevronRight size={15} className="transform -scale-x-100" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeleteTarget(patient)}
+                  className="p-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl transition-colors"
+                  title="حذف ملف المريض"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
             </div>
           );
         })}
@@ -358,6 +396,43 @@ export default function PatientTable({
           </div>
         )}
       </div>
+
+      {/* Delete Patient Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 border border-slate-200 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-600">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center">
+                <AlertTriangle size={20} />
+              </div>
+              <h3 className="text-base font-black text-slate-900">
+                {isRTL ? 'تأكيد حذف ملف المريض' : 'Confirm Delete Patient'}
+              </h3>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              {isRTL
+                ? `هل أنت متأكد من حذف ملف المريض "${deleteTarget.name}" نهائياً من سجل عيادتك؟`
+                : `Are you sure you want to delete "${deleteTarget.name}"?`}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+              >
+                {isRTL ? 'إلغاء' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeletePatient}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+              >
+                {isRTL ? 'تأكيد الحذف' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

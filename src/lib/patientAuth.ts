@@ -105,6 +105,15 @@ export async function verifyPatientAccess(
     let firestoreSecurityToken = '';
     let patientDob = '';
 
+    const isSeedPatient = ['1', '2', '3', '4', '5'].includes(patientId);
+    if (!snap.exists() && !isSeedPatient) {
+      return {
+        valid: false,
+        expectedToken: cleanExpectedToken,
+        reason: `لا يوجد ملف طبي مسجل برقم (#${patientId}). يرجى مراجعة العيادة.`
+      };
+    }
+
     if (snap.exists()) {
       const data = snap.data();
       patientName = data.name || patientName;
