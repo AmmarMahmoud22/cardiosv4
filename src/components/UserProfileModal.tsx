@@ -81,13 +81,13 @@ const compressPhoto = (dataUrl: string, maxWidth = 250, maxHeight = 250, quality
 export default function UserProfileModal({
   isOpen,
   onClose,
-  userId = 'doc-1',
-  userName = 'د/ عمار محمود',
-  userEmail = 'dr.ammar@cardios.eg',
-  userPhone = '01012345678',
+  userId = '',
+  userName = '',
+  userEmail = '',
+  userPhone = '',
   userRole = 'Cardiologist',
   avatarUrl: initialAvatarUrl = '',
-  clinicWhatsAppNumber: initialClinicWhatsApp = '01012345678',
+  clinicWhatsAppNumber: initialClinicWhatsApp = '',
   onSaveSuccess
 }: UserProfileModalProps) {
   const { language, isRTL, t, setLanguage } = useLanguage();
@@ -130,6 +130,7 @@ export default function UserProfileModal({
       setErrorMessage('');
 
       // Attempt to load profile from Firestore
+      if (!userId) return;
       const loadProfile = async () => {
         try {
           const userDocRef = doc(db, 'users', userId);
@@ -233,6 +234,10 @@ export default function UserProfileModal({
   // Save profile modifications
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!userId) {
+      setErrorMessage('معرف المستخدم غير متوفر.');
+      return;
+    }
     if (!name.trim()) {
       setErrorMessage('الاسم مطلوب.');
       return;
@@ -460,7 +465,7 @@ export default function UserProfileModal({
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="د. عمار محمود"
+                    placeholder="د. اسم الطبيب"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                   />
                   <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -477,7 +482,7 @@ export default function UserProfileModal({
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="doctor@cardios.eg"
+                    placeholder="doctor@example.com"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                   />
                   <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -494,7 +499,7 @@ export default function UserProfileModal({
                     type="text"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="01012345678"
+                    placeholder="010XXXXXXXX"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                   />
                   <Phone className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -527,14 +532,14 @@ export default function UserProfileModal({
             </div>
 
             <p className="text-[11px] text-emerald-800 leading-relaxed">
-              هذا هو الرقم الذي يظهر للمريض في بوابة المتابعة للضغط عليه والتواصل مباشرة عبر الواتساب معه، ولا يرتبط برقم حجز الديمو التجريبي الخاص بالمنصة.
+              هذا هو الرقم الذي يظهر للمريض في بوابة المتابعة للضغط عليه والتواصل مباشرة عبر الواتساب مع عيادتك.
             </p>
 
             <input
               type="text"
               value={clinicWhatsApp}
               onChange={(e) => setClinicWhatsApp(e.target.value)}
-              placeholder="مثال: 01012345678 أو 201012345678"
+              placeholder="مثال: 010XXXXXXXX"
               className="w-full px-3.5 py-2 bg-white border border-emerald-300 rounded-xl text-sm font-mono font-bold text-emerald-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
             />
           </div>

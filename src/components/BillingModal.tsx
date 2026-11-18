@@ -1,28 +1,382 @@
-import React, {useState} from 'react';
-import {addDoc, collection} from 'firebase/firestore';
-import {db} from '../lib/firebase';
+import React, { useEffect, useState } from 'react';
+import { addDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import { db, auth } from '../lib/firebase';
+import { ClinicContract, ClinicInvoice, StaffRole } from '../types/clinic';
+import { Receipt, X, CheckCircle2, CreditCard, Banknote, Smartphone, ShieldCheck } from 'lucide-react';
 
-export default function BillingModal({patientId, onClose}: {patientId: string, onClose: () => void}) {
-  const [amount, setAmount] = useState('');
-  const [description, setDescription] = useState('');
+interface BillingModalProps {
+  patientId: string;
+  patientName?: string;
+  patientPhone?: string;
+  doctorId?: string;
+  staffUids?: string[];
+  staffRole?: StaffRole;
+  staffName?: string;
+  onClose: () => void;
+  onSaved?: () => void;
+}
 
-  const saveInvoice = async () => {
-    if (amount && description) {
-      await addDoc(collection(db, 'patients', patientId, 'invoices'), {amount: Number(amount), description, status: 'Unpaid', date: new Date().toISOString()});
+const SERVICE_PRESETS: Array<{
+  type: ClinicInvoice['serviceType'];
+  label: string;
+  defaultPrice: number;
+}> = [
+  { type: 'consultation', label: 'كشف قلب جديد', defaultPrice: 500 },
+  { type: 'followup', label: 'استشارة / متابعة', defaultPrice: 200 },
+  { type: 'echo', label: 'موجات صوتية على القلب (Echo)', defaultPrice: 800 },
+  { type: 'ecg', label: 'رسم قلب عادي (ECG)', defaultPrice: 150 },
+  { type: 'other', label: 'خدمة / إجراء آخر', defaultPrice: 300 }
+];
+
+export default function BillingModal({
+  patientId,
+  patientName = '',
+  patientPhone = '',
+  doctorId = '',
+  staffUids = [],
+  staffRole = 'doctor',
+  staffName = '',
+  onClose,
+  onSaved
+}: BillingModalProps) {
+  const [serviceType, setServiceType] = useState<ClinicInvoice['serviceType']>('consultation');
+  const [serviceLabel, setServiceLabel] = useState('كشف قلب جديد');
+  const [baseAmount, setBaseAmount] = useState<string>('500');
+  const [contracts, setContracts] = useState<ClinicContract[]>([]);
+  const [selectedContractId, setSelectedContractId] = useState<string>('cash');
+  const [customDiscount, setCustomDiscount] = useState<string>('0');
+  const [paymentMethod, setPaymentMethod] = useState<ClinicInvoice['paymentMethod']>('Cash');
+  const [status, setStatus] = useState<ClinicInvoice['status']>('Paid');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!doctorId) return;
+    const uid = auth.currentUser?.uid;
+    const contractsQuery =
+      staffRole === 'receptionist' && uid
+        ? query(collection(db, 'clinic_contracts'), where('staffUids', 'array-contains', uid))
+        : query(collection(db, 'clinic_contracts'), where('doctorId', '==', doctorId));
+
+    getDocs(contractsQuery)
+      .then((snap) => {
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as any) } as ClinicContract))
+          .filter((c) => c.isActive !== false);
+        setContracts(list);
+      })
+      .catch(() => {});
+  }, [doctorId, staffRole]);
+
+  const handleSelectService = (preset: (typeof SERVICE_PRESETS)[number]) => {
+    setServiceType(preset.type);
+    setServiceLabel(preset.label);
+    setBaseAmount(String(preset.defaultPrice));
+  };
+
+  const chosenContract = contracts.find((c) => c.id === selectedContractId);
+  const numericBase = Math.max(0, Number(baseAmount) || 0);
+  const discountPct = chosenContract
+    ? Math.min(100, Math.max(0, Number(chosenContract.discountPercent) || 0))
+    : Math.min(100, Math.max(0, Number(customDiscount) || 0));
+  const coveragePct = chosenContract
+    ? Math.min(100, Math.max(0, Number(chosenContract.coveragePercent) || 0))
+    : 0;
+
+  const discountAmount = Math.round((numericBase * discountPct) / 100);
+  const afterDiscount = Math.max(0, numericBase - discountAmount);
+  const entityShare = Math.round((afterDiscount * coveragePct) / 100);
+  const patientPayable = Math.max(0, afterDiscount - entityShare);
+
+  const saveInvoice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (numericBase <= 0 || !serviceLabel.trim()) {
+      setError('يرجى إدخال قيمة ووصف الخدمة الطبية.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const now = new Date().toISOString();
+      const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`;
+
+      const invoicePayload: Omit<ClinicInvoice, 'id'> = {
+        invoiceNumber,
+        doctorId,
+        staffUids,
+        patientId,
+        patientName: patientName || `مريض #${patientId}`,
+        patientPhone,
+        serviceType,
+        serviceLabel: serviceLabel.trim(),
+        baseAmount: numericBase,
+        contractId: chosenContract?.id || 'cash',
+        contractName: chosenContract?.name || 'نقدي (كشف خاص)',
+        discountPercent: discountPct,
+        discountAmount,
+        patientPayable,
+        entityShare,
+        paymentMethod,
+        status,
+        date: now,
+        createdAt: now,
+        ...(status === 'Paid' ? { paidAt: now } : {}),
+        createdBy: staffName || 'إدارة العيادة',
+        createdByRole: staffRole,
+        notes: notes.trim()
+      };
+
+      await Promise.all([
+        addDoc(collection(db, 'patients', patientId, 'invoices'), {
+          ...invoicePayload,
+          amount: patientPayable,
+          description: `${serviceLabel.trim()} (${invoicePayload.contractName})`
+        }),
+        ...(doctorId ? [addDoc(collection(db, 'clinic_invoices'), invoicePayload)] : [])
+      ]);
+
+      onSaved?.();
       onClose();
+    } catch (err) {
+      console.error('Error saving invoice:', err);
+      setError('تعذر حفظ الفاتورة، يرجى المحاولة مرة أخرى.');
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center">
-      <div className="bg-white p-6 rounded-lg shadow w-96">
-        <h2 className="text-xl font-bold mb-4">New Invoice</h2>
-        <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount" className="w-full p-2 border rounded mb-2" />
-        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Service Description" className="w-full p-2 border rounded mb-4" />
-        <div className="flex gap-2">
-            <button onClick={saveInvoice} className="bg-green-600 text-white px-4 py-2 rounded">Save Invoice</button>
-            <button onClick={onClose} className="bg-gray-400 text-white px-4 py-2 rounded">Cancel</button>
+    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
+      <div className="absolute inset-0" onClick={onClose} />
+      <div className="relative z-10 bg-white rounded-3xl max-w-lg w-full border border-slate-200 shadow-2xl overflow-hidden max-h-[94vh] flex flex-col">
+        <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center">
+              <Receipt size={20} />
+            </div>
+            <div>
+              <h2 className="text-base font-black text-slate-900">إصدار فاتورة كشف / خدمة طبية</h2>
+              <p className="text-xs text-slate-500">
+                {patientName ? `المريض: ${patientName}` : `ملف #${patientId}`}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-slate-900 flex items-center justify-center cursor-pointer"
+          >
+            <X size={18} />
+          </button>
         </div>
+
+        <form onSubmit={saveInvoice} className="p-5 overflow-y-auto space-y-4 text-xs">
+          {error && (
+            <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl font-semibold">
+              {error}
+            </div>
+          )}
+
+          {/* Service Presets */}
+          <div>
+            <label className="block font-bold text-slate-700 mb-1.5">نوع الخدمة السريرية:</label>
+            <div className="flex flex-wrap gap-1.5">
+              {SERVICE_PRESETS.map((preset) => (
+                <button
+                  key={preset.type}
+                  type="button"
+                  onClick={() => handleSelectService(preset)}
+                  className={`px-3 py-1.5 rounded-xl font-bold border transition-all cursor-pointer ${
+                    serviceType === preset.type
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  {preset.label} ({preset.defaultPrice} ج.م)
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">بيان الخدمة *</label>
+              <input
+                type="text"
+                required
+                value={serviceLabel}
+                onChange={(e) => setServiceLabel(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 focus:bg-white focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">سعر الخدمة الأساسي (EGP) *</label>
+              <input
+                type="number"
+                required
+                min={1}
+                value={baseAmount}
+                onChange={(e) => setBaseAmount(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-mono font-bold focus:bg-white focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Contract / Syndicate Selector */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">التعاقد / النقابة / التأمين:</label>
+              <select
+                value={selectedContractId}
+                onChange={(e) => setSelectedContractId(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-semibold focus:bg-white focus:border-emerald-500 focus:outline-none"
+              >
+                <option value="cash">نقدي (كشف خاص بدون تعاقد)</option>
+                {contracts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} (خصم {c.discountPercent}%{c.coveragePercent ? ` · تحمل ${c.coveragePercent}%` : ''})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedContractId === 'cash' ? (
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">خصم إضافي (%):</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={customDiscount}
+                  onChange={(e) => setCustomDiscount(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-mono focus:bg-white focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+            ) : (
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-2.5 flex items-center gap-2 text-indigo-800">
+                <ShieldCheck size={16} className="shrink-0" />
+                <div className="text-[11px]">
+                  <div className="font-bold">{chosenContract?.name}</div>
+                  <div>تحمل الجهة: {entityShare} ج.م</div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Payment Method & Status */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1.5">وسيلة الدفع:</label>
+              <div className="grid grid-cols-3 gap-1">
+                {[
+                  { id: 'Cash', label: 'كاش', icon: Banknote },
+                  { id: 'InstaPay', label: 'InstaPay', icon: Smartphone },
+                  { id: 'Card', label: 'فيزا', icon: CreditCard }
+                ].map((m) => {
+                  const Icon = m.icon;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setPaymentMethod(m.id as any)}
+                      className={`py-2 px-1 rounded-xl border font-bold flex flex-col items-center gap-1 cursor-pointer ${
+                        paymentMethod === m.id
+                          ? 'bg-teal-600 text-white border-teal-600'
+                          : 'bg-slate-50 text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      <Icon size={13} />
+                      <span className="text-[10px]">{m.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1.5">حالة التحصيل:</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setStatus('Paid')}
+                  className={`py-2.5 rounded-xl border font-bold cursor-pointer ${
+                    status === 'Paid'
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-slate-50 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  تم التحصيل
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatus('Unpaid')}
+                  className={`py-2.5 rounded-xl border font-bold cursor-pointer ${
+                    status === 'Unpaid'
+                      ? 'bg-amber-500 text-white border-amber-500'
+                      : 'bg-slate-50 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  آجل / مستحق
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">ملاحظات الإيصال (اختياري):</label>
+            <input
+              type="text"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="مثال: رقم كارنيه النقابة أو تحويل شركة التأمين"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 focus:bg-white focus:border-emerald-500 focus:outline-none"
+            />
+          </div>
+
+          {/* Financial Summary Box */}
+          <div className="bg-slate-900 text-white rounded-2xl p-4 space-y-1.5">
+            <div className="flex justify-between text-slate-300">
+              <span>إجمالي الخدمة الأساسي:</span>
+              <span className="font-mono">{numericBase} EGP</span>
+            </div>
+            {discountAmount > 0 && (
+              <div className="flex justify-between text-amber-300">
+                <span>قيمة الخصم ({discountPct}%):</span>
+                <span className="font-mono">- {discountAmount} EGP</span>
+              </div>
+            )}
+            {entityShare > 0 && (
+              <div className="flex justify-between text-sky-300">
+                <span>حصة جهة التعاقد ({coveragePct}%):</span>
+                <span className="font-mono">{entityShare} EGP</span>
+              </div>
+            )}
+            <div className="flex justify-between text-base font-black pt-2 border-t border-slate-700">
+              <span>المطلوب تحصيله من المريض:</span>
+              <span className="font-mono text-emerald-400">{patientPayable} EGP</span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer"
+            >
+              إلغاء
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl font-bold shadow-sm flex items-center gap-1.5 cursor-pointer"
+            >
+              <CheckCircle2 size={15} />
+              <span>{saving ? 'جاري الحفظ...' : 'اعتماد وحفظ الفاتورة'}</span>
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

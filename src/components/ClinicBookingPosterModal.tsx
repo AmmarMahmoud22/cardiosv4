@@ -18,11 +18,11 @@ import { DoctorScheduleSettings } from '../types/appointment';
 export default function ClinicBookingPosterModal({
   isOpen,
   onClose,
-  doctorId = 'doc-1',
-  doctorName = 'د/ عمار محمود',
+  doctorId = '',
+  doctorName = '',
   specialty = 'استشاري أمراض القلب والقسطرة التداخلية',
   clinicName = 'عيادة أمراض القلب والقسطرة',
-  clinicCode = 'CLINIC-AMMAR-101'
+  clinicCode = ''
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -41,6 +41,10 @@ export default function ClinicBookingPosterModal({
 
   useEffect(() => {
     if (!isOpen) return;
+    setCurrentClinicName(clinicName);
+    setCurrentDoctorName(doctorName);
+    setCurrentSpecialty(specialty);
+    if (!doctorId) return;
 
     const fetchPosterSettings = async () => {
       try {
@@ -59,7 +63,7 @@ export default function ClinicBookingPosterModal({
     };
 
     fetchPosterSettings();
-  }, [isOpen, doctorId]);
+  }, [isOpen, doctorId, clinicName, doctorName, specialty]);
 
   if (!isOpen) return null;
 

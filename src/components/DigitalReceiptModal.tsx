@@ -58,10 +58,8 @@ export default function DigitalReceiptModal({
     }
   };
 
-  const handleWhatsAppShare = () => {
-    const text = `*إيصال حجز كشف عيادة القلب* 🩺\n\n*رقم الدور:* #${data.queueNumber}\n*اسم المريض:* ${data.patientName}\n*الموعد:* ${formattedDate()}\n*العيادة:* ${data.clinicName || 'عيادة القلب'}\n*الطبيب:* ${data.doctorName || 'د/ عمار محمود'}\n\n*التعليمات:* ${data.instructions || 'يرجى الحضور قبل الموعد بـ 15 دقيقة.'}`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-  };
+  const whatsappText = `*إيصال حجز كشف عيادة القلب* 🩺\n\n*رقم الدور:* #${data.queueNumber}\n*اسم المريض:* ${data.patientName}\n*الموعد:* ${formattedDate()}\n*العيادة:* ${data.clinicName || 'عيادة القلب'}\n*الطبيب:* ${data.doctorName || 'الطبيب المعالج'}\n\n*التعليمات:* ${data.instructions || 'يرجى الحضور قبل الموعد بـ 15 دقيقة.'}`;
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(whatsappText)}`;
 
   const renderReceiptLogo = () => {
     if (data.clinicLogoUrl) {
@@ -136,7 +134,7 @@ export default function DigitalReceiptModal({
                 تأكيد حجز الموعد
               </span>
               <h2 className="text-lg font-black">{data.clinicName || 'عيادة أمراض القلب والقسطرة'}</h2>
-              <p className="text-xs text-white/90 font-medium">{data.doctorName || 'د/ عمار محمود'}</p>
+              <p className="text-xs text-white/90 font-medium">{data.doctorName || 'الطبيب المعالج'}</p>
             </div>
 
             {/* QUEUE NUMBER BIG BADGE */}
@@ -196,7 +194,7 @@ export default function DigitalReceiptModal({
 
             {/* Receipt Footer */}
             <div className="pt-2 flex items-center justify-between text-[10px] text-slate-400 font-mono">
-              <span>كود العيادة: {data.clinicCode || 'CLINIC-AMMAR-101'}</span>
+              <span>كود العيادة: {data.clinicCode || '—'}</span>
               <span>Cardios Health EHR</span>
             </div>
           </div>
@@ -204,13 +202,15 @@ export default function DigitalReceiptModal({
 
         {/* Footer Actions */}
         <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between no-print shrink-0">
-          <button
-            onClick={handleWhatsAppShare}
+          <a
+            href={whatsappUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
           >
             <Share2 size={15} />
             <span>واتساب</span>
-          </button>
+          </a>
 
           <div className="flex items-center gap-2">
             <button

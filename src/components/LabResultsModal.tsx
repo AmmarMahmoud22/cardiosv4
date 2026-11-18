@@ -56,25 +56,11 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
     fetch();
   }, [patientId]);
 
-  const labs = patient?.labs || {
-    ldl: '72 mg/dL',
-    hdl: '44 mg/dL',
-    creatinine: '0.9 mg/dL',
-    egfr: '92 mL/min',
-    potassium: '4.4 mmol/L',
-    hba1c: '5.8%',
-    troponin: 'سالب (<0.01 ng/mL)',
-    labNotes: 'عينات معتمدة مخبرياً من معمل الأزهري.',
-    technician: 'معمل الأزهري للتحاليل الطبية'
-  };
-
-  const attachment = labs.attachment || {
-    name: `Azhari_Lab_Report_${patientId}.pdf`,
-    size: '240.5 KB',
-    url: 'data:application/pdf;base64,JVBERi0xLjQKJcOkw7zDtsOfCjEgMCBvYmoKPDwvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9QYWdlcyAvQ291bnQgMSAvS2lkcyBbMyAwIFJdPj4KZW5kb2JqCjMgMCBvYmoKPDwvVHlwZSAvUGFnZSAvUGFyZW50IDIgMCBSIC9NZWRpYUJveCBbMCAwIDYxMiA3OTJdID4+CmVuZG9iagoNCnhyZWYNCjAgNA0KMDAwMDAwMDAwMCA2NTUzNSBmDQowMDAwMDAwMDE5IDAwMDAwIG4NCjAwMDAwMDAwNjggMDAwMDAgbg0KMDAwMDAwMDEyMiAwMDAwMCBuDQp0cmFpbGVyDQo8PC9TaXplIDQgL1Jvb3QgMSAwIFI+Pg0Kc3RhcnR4cmVmDQoxOTMNCiUlRU9G'
-  };
+  const labs = patient?.labs || null;
+  const attachment = labs?.attachment?.url ? labs.attachment : null;
 
   const approveLab = async () => {
+    if (!labs) return;
     setUpdating(true);
     try {
       await updateDoc(doc(db, 'patients', patientId), {
@@ -96,7 +82,7 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
     setSendingOrder(true);
     setOrderError('');
     try {
-      const activeDocName = patient?.doctorName || 'د/ عمار محمود';
+      const activeDocName = patient?.doctorName || 'الطبيب المعالج';
       const orderPayload = {
         text: doctorRecommendation,
         doctorName: activeDocName,
@@ -124,9 +110,10 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
         await addDoc(collection(db, 'lab_orders'), {
           patientId,
           patientName: patient?.name || `مريض #${patientId}`,
-          doctorId: patient?.doctorId || 'doc-1',
+          doctorId: patient?.doctorId || '',
+          staffUids: Array.isArray(patient?.staffUids) ? patient.staffUids : [],
           doctorName: activeDocName,
-          clinicCode: patient?.clinicCode || 'CLINIC-AMMAR-101',
+          clinicCode: patient?.clinicCode || '',
           tests: ['تحاليل مخبرية متابعة', 'وظائف كلى ودهون'],
           priority: doctorRecommendation.includes('عاجل') || doctorRecommendation.includes('STAT') ? 'urgent' : 'routine',
           instructions: doctorRecommendation,
@@ -149,27 +136,28 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
 
   // Plain Arabic AI explanation helper
   const getAiExplanationText = () => {
-    const ldlVal = parseFloat(labs.ldl) || 72;
-    const egfrVal = parseFloat(labs.egfr) || 92;
+    if (!labs) return 'لا توجد نتائج تحاليل مسجلة لتفسيرها بعد.';
+    const ldlVal = parseFloat(labs.ldl);
+    const egfrVal = parseFloat(labs.egfr);
     const isTropNeg = !labs.troponin || labs.troponin.includes('سالب');
 
     return `
-• كوليسترول الدم (LDL = ${labs.ldl}): ${
-      ldlVal <= 70
+${labs.ldl ? `• كوليسترول الدم (LDL = ${labs.ldl}): ${
+      !Number.isNaN(ldlVal) && ldlVal <= 70
         ? 'نتيجة ممتازة وفي النطاق المثالي المستهدف لحماية شرايين القلب والصمامات.'
-        : 'أعلى قليلاً من الهدف المطلوب لمريض القلب (الهدف أقل من 70 mg/dL)، يوصى بالالتزام بدواء الكوليسترول والنظام الغذائي.'
-    }
-• وظائف الكلى والفلترة (eGFR = ${labs.egfr}): ${
-      egfrVal >= 60
+        : 'يوصى بمتابعة القراءة مع الطبيب والالتزام بالخطة العلاجية والنظام الغذائي.'
+    }` : ''}
+${labs.egfr ? `• وظائف الكلى والفلترة (eGFR = ${labs.egfr}): ${
+      !Number.isNaN(egfrVal) && egfrVal >= 60
         ? 'كفاءة الكلى ممتازة وتعمل بشكل طبيعي وآمن.'
-        : 'توجد نسبة تراجع خفيفة في كفاءة الكلى، يرجى الالتزام بشرب السوائل ومراجعة جرعات الأدوية مع الطبيب.'
-    }
-• إنزيم جلطة القلب (Troponin = ${labs.troponin}): ${
+        : 'يرجى متابعة وظائف الكلى ومراجعة جرعات الأدوية مع الطبيب.'
+    }` : ''}
+${labs.troponin ? `• إنزيم جلطة القلب (Troponin = ${labs.troponin}): ${
       isTropNeg
-        ? 'نتيجة سلبية وسليمة تماماً تؤكد عدم وجود أي إجهاد أو تلف في عضلة القلب.'
+        ? 'نتيجة سلبية تؤكد عدم وجود إجهاد حاد في عضلة القلب.'
         : 'توجد قراءة تحتاج لمتابعة، يرجى التواصل مع العيادة.'
-    }
-    `.trim();
+    }` : ''}
+    `.trim() || 'تم توثيق القيم المخبرية بنجاح في ملف المريض.';
   };
 
   return (
@@ -198,126 +186,135 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
 
         {/* Content */}
         <div className="p-6 space-y-5">
-          {/* Status & Lab Info Banner */}
-          <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-3.5 text-xs text-blue-900 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <ShieldCheck size={18} className="text-blue-600 shrink-0" />
-              <span>فني المختبر: <strong>{labs.technician || 'د. أحمد صابر'}</strong></span>
+          {!labs ? (
+            <div className="p-6 bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-center space-y-2">
+              <Droplets size={28} className="mx-auto text-slate-400" />
+              <p className="text-sm font-bold text-slate-800">لا توجد نتائج تحاليل مسجلة لهذا المريض بعد</p>
+              <p className="text-xs text-slate-500">يمكنك إرسال طلب فحوصات للمعمل المرتبط بالعيادة من القسم التالي ليتم رفع النتائج هنا فور اعتمادها.</p>
             </div>
-            <span className="font-bold text-blue-700 font-mono">
-              تاريخ التحديث: {labs.updatedAt ? new Date(labs.updatedAt).toLocaleDateString('ar-EG') : 'اليوم'}
-            </span>
-          </div>
-
-          {/* Biomarkers Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
-              <div className="text-slate-500 mb-1 flex items-center justify-between">
-                <span>الكوليسترول الضار (LDL)</span>
-                <span className="text-[10px] text-emerald-600 font-bold bg-emerald-100 px-1.5 py-0.5 rounded">&lt; 70</span>
+          ) : (
+            <>
+              {/* Status & Lab Info Banner */}
+              <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-3.5 text-xs text-blue-900 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={18} className="text-blue-600 shrink-0" />
+                  <span>فني / معمل التحاليل: <strong>{labs.technician || 'معمل التحاليل المعتمد'}</strong></span>
+                </div>
+                <span className="font-bold text-blue-700 font-mono">
+                  تاريخ التحديث: {labs.updatedAt ? new Date(labs.updatedAt).toLocaleDateString('ar-EG') : '—'}
+                </span>
               </div>
-              <div className="text-lg font-bold text-slate-800 font-mono">{labs.ldl}</div>
-            </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
-              <div className="text-slate-500 mb-1 flex items-center justify-between">
-                <span>الكوليسترول النافع (HDL)</span>
-                <span className="text-[10px] text-blue-600 font-bold bg-blue-100 px-1.5 py-0.5 rounded">&gt; 40</span>
+              {/* Biomarkers Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
+                  <div className="text-slate-500 mb-1 flex items-center justify-between">
+                    <span>الكوليسترول الضار (LDL)</span>
+                    <span className="text-[10px] text-emerald-600 font-bold bg-emerald-100 px-1.5 py-0.5 rounded">&lt; 70</span>
+                  </div>
+                  <div className="text-lg font-bold text-slate-800 font-mono">{labs.ldl || '—'}</div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
+                  <div className="text-slate-500 mb-1 flex items-center justify-between">
+                    <span>الكوليسترول النافع (HDL)</span>
+                    <span className="text-[10px] text-blue-600 font-bold bg-blue-100 px-1.5 py-0.5 rounded">&gt; 40</span>
+                  </div>
+                  <div className="text-lg font-bold text-slate-800 font-mono">{labs.hdl || '—'}</div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
+                  <div className="text-slate-500 mb-1 flex items-center justify-between">
+                    <span>الكرياتينين (Creatinine)</span>
+                    <span className="text-[10px] text-slate-500">0.7 - 1.2</span>
+                  </div>
+                  <div className="text-lg font-bold text-slate-800 font-mono">{labs.creatinine || '—'}</div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
+                  <div className="text-slate-500 mb-1 flex items-center justify-between">
+                    <span>الفلترة الكلوية (eGFR)</span>
+                    <span className="text-[10px] text-emerald-600 font-bold bg-emerald-100 px-1.5 py-0.5 rounded">&gt; 60</span>
+                  </div>
+                  <div className="text-lg font-bold text-slate-800 font-mono">{labs.egfr || '—'}</div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
+                  <div className="text-slate-500 mb-1 flex items-center justify-between">
+                    <span>البوتاسيوم (K+)</span>
+                    <span className="text-[10px] text-slate-500">3.5 - 5.0</span>
+                  </div>
+                  <div className="text-lg font-bold text-slate-800 font-mono">{labs.potassium || '—'}</div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
+                  <div className="text-slate-500 mb-1 flex items-center justify-between">
+                    <span>السكر التراكمي (HbA1c)</span>
+                    <span className="text-[10px] text-amber-600 font-bold bg-amber-100 px-1.5 py-0.5 rounded">&lt; 7.0%</span>
+                  </div>
+                  <div className="text-lg font-bold text-slate-800 font-mono">{labs.hba1c || '—'}</div>
+                </div>
               </div>
-              <div className="text-lg font-bold text-slate-800 font-mono">{labs.hdl || '44 mg/dL'}</div>
-            </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
-              <div className="text-slate-500 mb-1 flex items-center justify-between">
-                <span>الكرياتينين (Creatinine)</span>
-                <span className="text-[10px] text-slate-500">0.7 - 1.2</span>
-              </div>
-              <div className="text-lg font-bold text-slate-800 font-mono">{labs.creatinine}</div>
-            </div>
+              {labs.troponin && (
+                <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-3 text-xs flex items-center justify-between text-emerald-900">
+                  <span className="font-semibold">إنزيم تروبونين القلب (hs-cTnI):</span>
+                  <span className="font-bold font-mono">{labs.troponin}</span>
+                </div>
+              )}
 
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
-              <div className="text-slate-500 mb-1 flex items-center justify-between">
-                <span>الفلترة الكلوية (eGFR)</span>
-                <span className="text-[10px] text-emerald-600 font-bold bg-emerald-100 px-1.5 py-0.5 rounded">&gt; 60</span>
-              </div>
-              <div className="text-lg font-bold text-slate-800 font-mono">{labs.egfr}</div>
-            </div>
+              {attachment && (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <FileCheck size={18} className="text-teal-600" />
+                      <div>
+                        <h4 className="font-bold text-xs text-slate-800">تقرير المعمل الأصلي المرفق</h4>
+                        <p className="text-[10px] text-slate-500 font-mono">{attachment.name} {attachment.size ? `• ${attachment.size}` : ''}</p>
+                      </div>
+                    </div>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
-              <div className="text-slate-500 mb-1 flex items-center justify-between">
-                <span>البوتاسيوم (K+)</span>
-                <span className="text-[10px] text-slate-500">3.5 - 5.0</span>
-              </div>
-              <div className="text-lg font-bold text-slate-800 font-mono">{labs.potassium}</div>
-            </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setShowAttachmentViewer(!showAttachmentViewer)}
+                        className="px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+                      >
+                        <FileText size={14} />
+                        <span>{showAttachmentViewer ? 'إخفاء المعاينة' : 'معاينة ملخص التقرير'}</span>
+                      </button>
 
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
-              <div className="text-slate-500 mb-1 flex items-center justify-between">
-                <span>السكر التراكمي (HbA1c)</span>
-                <span className="text-[10px] text-amber-600 font-bold bg-amber-100 px-1.5 py-0.5 rounded">&lt; 7.0%</span>
-              </div>
-              <div className="text-lg font-bold text-slate-800 font-mono">{labs.hba1c}</div>
-            </div>
-          </div>
+                      <a
+                        href={attachment.url}
+                        download={attachment.name}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+                      >
+                        <Download size={14} />
+                        <span>تنزيل</span>
+                      </a>
+                    </div>
+                  </div>
 
-          {labs.troponin && (
-            <div className="bg-emerald-50/80 border border-emerald-200 rounded-2xl p-3 text-xs flex items-center justify-between text-emerald-900">
-              <span className="font-semibold">إنزيم تروبونين القلب (hs-cTnI):</span>
-              <span className="font-bold font-mono">{labs.troponin}</span>
-            </div>
+                  {showAttachmentViewer && (
+                    <div className="mt-3 p-4 bg-white border border-slate-300 rounded-2xl shadow-inner text-center space-y-3">
+                      <div className="bg-slate-900 text-white p-4 rounded-xl text-right font-mono text-xs space-y-2">
+                        <div className="border-b border-slate-700 pb-2 flex justify-between items-center">
+                          <span className="text-teal-400 font-bold">CARDIOS CLINICAL LAB REPORT</span>
+                          <span className="text-slate-400">VERIFIED RECORD</span>
+                        </div>
+                        <div className="text-slate-300 space-y-1 text-[11px]">
+                          <p>Patient Name: {patient?.name || '—'}</p>
+                          <p>Lab Reference ID: LAB-{patientId}</p>
+                          <p>Lipid Profile: LDL={labs.ldl || '—'}, HDL={labs.hdl || '—'}</p>
+                          <p>Renal Panel: Creatinine={labs.creatinine || '—'}, eGFR={labs.egfr || '—'}, K+={labs.potassium || '—'}</p>
+                          <p>Biomarkers: Troponin={labs.troponin || '—'}, HbA1c={labs.hba1c || '—'}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
-
-          {/* Option 1: Official Lab Attachment Scanner View */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <FileCheck size={18} className="text-teal-600" />
-                <div>
-                  <h4 className="font-bold text-xs text-slate-800">تقرير المعمل الأصلي المرفق (PDF Scan)</h4>
-                  <p className="text-[10px] text-slate-500 font-mono">{attachment.name} • {attachment.size}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowAttachmentViewer(!showAttachmentViewer)}
-                  className="px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1"
-                >
-                  <FileText size={14} />
-                  <span>{showAttachmentViewer ? 'إخفاء المعاينة' : 'معاينة التقرير الورقي'}</span>
-                </button>
-
-                <a
-                  href={attachment.url}
-                  download={attachment.name}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1"
-                >
-                  <Download size={14} />
-                  <span>تنزيل</span>
-                </a>
-              </div>
-            </div>
-
-            {/* Embedded Interactive Viewer */}
-            {showAttachmentViewer && (
-              <div className="mt-3 p-4 bg-white border border-slate-300 rounded-2xl shadow-inner text-center space-y-3">
-                <div className="bg-slate-900 text-white p-4 rounded-xl text-right font-mono text-xs space-y-2">
-                  <div className="border-b border-slate-700 pb-2 flex justify-between items-center">
-                    <span className="text-teal-400 font-bold">CARDIOS CLINICAL LAB REPORT - OFFICIAL SCAN</span>
-                    <span className="text-slate-400">PDF VERSION 1.4</span>
-                  </div>
-                  <div className="text-slate-300 space-y-1 text-[11px]">
-                    <p>Patient Name: {patient?.name || 'Ahmed El-Kady'}</p>
-                    <p>Lab Reference ID: LAB-{patientId}-2026</p>
-                    <p>Lipid Profile: LDL={labs.ldl}, HDL={labs.hdl}</p>
-                    <p>Renal Panel: Creatinine={labs.creatinine}, eGFR={labs.egfr}, K+={labs.potassium}</p>
-                    <p>Biomarkers: Troponin={labs.troponin}, HbA1c={labs.hba1c}</p>
-                    <p className="text-emerald-400 pt-1">Status: VERIFIED & SIGNED BY CONSULTANT PATHOLOGIST</p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
 
           {/* Option 2: Doctor Direct Feedback & Order Entry */}
           <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 space-y-3">
@@ -428,7 +425,7 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
 
           <button
             onClick={approveLab}
-            disabled={updating}
+            disabled={updating || !labs}
             className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white text-xs font-bold rounded-xl shadow-xs transition-all active:scale-95 disabled:opacity-50"
           >
             <CheckCircle2 size={16} />

@@ -92,70 +92,25 @@ export function getLocalMetrics(): AnalyticsMetrics {
   return ZERO_METRICS;
 }
 
-export const INITIAL_ACTIVITY_LOGS: AnalyticsEvent[] = [
-  {
-    id: 'evt-init-01',
-    type: 'clinic_signup',
-    title: 'تسجيل عيادة جديدة: عيادة النيل لأمراض القلب (د/ أحمد عبد العزيز)',
-    details: 'كود: CLINIC-CAIRO-101 • ترخيص: EGY-MED-49102 • تم إرسال الأوراق للاعتماد',
-    timestamp: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
-    severity: 'info',
-    source: 'Clinic Onboarding',
-    device: 'Desktop • Chrome'
-  },
-  {
-    id: 'evt-init-02',
-    type: 'clinic_approval',
-    title: 'اعتماد ترخيص وتفعيل عيادة: د/ سارة المنشاوي',
-    details: 'باقة العيادة المتقدمة Pro • تفعيل نظام فحص التداخلات الدوائية والتكامل السحابي',
-    timestamp: new Date(Date.now() - 35 * 60 * 1000).toISOString(),
-    severity: 'success',
-    source: 'SuperAdmin Portal',
-    device: 'Admin Console'
-  },
-  {
-    id: 'evt-init-03',
-    type: 'lab_connection',
-    title: 'ربط معمل جديد: معمل البرج - فرع المهندسين',
-    details: 'كود: LAB-BORG-01 • ربط ناجح مع 4 عيادات قلب نشطة • تكامل تحاليل Troponin و Lipid Panel',
-    timestamp: new Date(Date.now() - 78 * 60 * 1000).toISOString(),
-    severity: 'success',
-    source: 'Diagnostic Integration API',
-    device: 'Server Gateway'
-  },
-  {
-    id: 'evt-init-04',
-    type: 'error_report',
-    title: 'تنبيه حصة الذكاء الاصطناعي: عيادة د/ محمود الشريف شارفت على 85% من الكوتة',
-    details: 'تم استهلاك 420 من أصل 500 استعلام Gemini • تم إرسال إشعار تلقائي للترقية',
-    timestamp: new Date(Date.now() - 140 * 60 * 1000).toISOString(),
-    severity: 'warning',
-    source: 'Gemini Quota Guard',
-    device: 'Backend Worker'
-  },
-  {
-    id: 'evt-init-05',
-    type: 'system_operation',
-    title: 'فحص تكامل المزامنة الحية مع Google Calendar & Firestore',
-    details: 'زمن الاستجابة: 24ms • حالة الخوادم السحابية 100% صالحة للتشغيل',
-    timestamp: new Date(Date.now() - 210 * 60 * 1000).toISOString(),
-    severity: 'info',
-    source: 'Health Check Daemon',
-    device: 'System Service'
-  }
-];
-
 export function getLocalEvents(): AnalyticsEvent[] {
   try {
     const raw = localStorage.getItem(LOCAL_EVENTS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (ev: AnalyticsEvent) =>
+            !ev?.id?.startsWith('evt-init-') &&
+            ev?.type !== 'demo_doctor' &&
+            ev?.type !== 'demo_lab' &&
+            ev?.type !== 'demo_patient'
+        );
+      }
     }
   } catch (e) {
     console.warn('Error reading local events:', e);
   }
-  return INITIAL_ACTIVITY_LOGS;
+  return [];
 }
 
 function saveLocalMetrics(metrics: AnalyticsMetrics) {
@@ -232,57 +187,7 @@ export async function trackPageView(path = '/'): Promise<void> {
   }
 }
 
-// 2. TRACK REAL DEMO TRIALS
-export async function trackDemoTrial(type: 'doctor' | 'lab' | 'patient', details?: string): Promise<void> {
-  const current = getLocalMetrics();
-  const updated: AnalyticsMetrics = {
-    ...current,
-    demoTrialsTotal: (current.demoTrialsTotal || 0) + 1,
-    demoDoctorTrials: type === 'doctor' ? (current.demoDoctorTrials || 0) + 1 : (current.demoDoctorTrials || 0),
-    demoLabTrials: type === 'lab' ? (current.demoLabTrials || 0) + 1 : (current.demoLabTrials || 0),
-    demoPatientTrials: type === 'patient' ? (current.demoPatientTrials || 0) + 1 : (current.demoPatientTrials || 0),
-    lastUpdated: new Date().toISOString()
-  };
-  saveLocalMetrics(updated);
-
-  const title =
-    type === 'doctor'
-      ? 'تجربة الحساب التجريبي للطبيب (EHR)'
-      : type === 'lab'
-      ? 'تجربة بوابة معامل التحاليل (Lab Demo)'
-      : 'تجربة بوابة المريض الذكية (QR Demo)';
-
-  const event: AnalyticsEvent = {
-    id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    type: type === 'doctor' ? 'demo_doctor' : type === 'lab' ? 'demo_lab' : 'demo_patient',
-    title,
-    details: details || `تشغيل سريع لحساب تجريبي (${type})`,
-    timestamp: new Date().toISOString(),
-    device: getDeviceLabel()
-  };
-  saveLocalEvent(event);
-
-  try {
-    const metricsDocRef = doc(db, 'platform_analytics', 'metrics');
-    const snap = await getDoc(metricsDocRef);
-    if (!snap.exists()) {
-      await setDoc(metricsDocRef, updated, {merge: true});
-    } else {
-      await updateDoc(metricsDocRef, {
-        demoTrialsTotal: increment(1),
-        demoDoctorTrials: type === 'doctor' ? increment(1) : increment(0),
-        demoLabTrials: type === 'lab' ? increment(1) : increment(0),
-        demoPatientTrials: type === 'patient' ? increment(1) : increment(0),
-        lastUpdated: new Date().toISOString()
-      });
-    }
-    await setDoc(doc(db, 'platform_analytics_events', event.id), event, {merge: true});
-  } catch (err) {
-    console.warn('Firestore demo trial sync note:', err);
-  }
-}
-
-// 3. TRACK REAL REGISTRATIONS (Signups)
+// 2. TRACK REAL REGISTRATIONS (Signups)
 export async function trackSignupAttempt(role: 'doctor' | 'lab', name: string, code?: string): Promise<void> {
   const current = getLocalMetrics();
   const updated: AnalyticsMetrics = {
@@ -455,7 +360,12 @@ export function subscribeToAnalytics(
         const cloudEvents: AnalyticsEvent[] = [];
         snap.forEach((d) => {
           const data = d.data() as AnalyticsEvent;
-          if (!data.id?.startsWith('evt-init-')) {
+          if (
+            !data.id?.startsWith('evt-init-') &&
+            data.type !== 'demo_doctor' &&
+            data.type !== 'demo_lab' &&
+            data.type !== 'demo_patient'
+          ) {
             cloudEvents.push(data);
           }
         });

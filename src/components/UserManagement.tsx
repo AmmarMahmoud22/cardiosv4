@@ -1,23 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   collection,
   onSnapshot,
   doc,
-  setDoc
+  setDoc,
+  arrayUnion
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { SEED_DOCTORS, SEED_LABS } from '../lib/seed';
+import { db, createSecondaryAuthUser } from '../lib/firebase';
 import {
   deleteUserEverywhere,
-  getLocalDeletedIds,
-  getLocalSeedFlags,
   getSeedFlags,
   markSeedFlags,
   reconcileOrphanedSeedsWithSystemUsers,
+  syncDoctorScheduleSummary,
   syncStatusFromSystemUser
 } from '../lib/adminSync';
 import { generatePatientToken } from '../lib/patientAuth';
 import { useLanguage } from '../context/LanguageContext';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { PaginationControls } from './PaginationControls';
 import {
   Shield,
   Plus,
@@ -28,11 +29,8 @@ import {
   FlaskConical,
   User,
   Heart,
-  Check,
   X,
   AlertCircle,
-  Building2,
-  Mail,
   UserCheck
 } from 'lucide-react';
 
@@ -40,65 +38,51 @@ export interface UserRecord {
   id: string;
   name: string;
   email: string;
-  role: 'Cardiologist' | 'System Administrator' | 'Lab / Imaging Center' | 'Patient';
+  role: 'Cardiologist' | 'System Administrator' | 'Lab / Imaging Center' | 'Patient' | 'Clinic Staff';
   status: 'Active' | 'Inactive';
   lastLogin: string;
   licenseNumber?: string;
   facilityName?: string;
   clinicCode?: string;
   labCode?: string;
+  doctorId?: string;
+  doctorName?: string;
+  roleTitle?: string;
   patientFileId?: string;
   patientToken?: string;
-  password?: string;
   isCurrentUser?: boolean;
 }
 
-// Generate default real system users from the platform's actual data seeds
-const REAL_SYSTEM_USERS: UserRecord[] = [
-  {
-    id: 'admin-1',
-    name: 'م. أحمد كمال (مدير النظام)',
-    email: 'admin@cardios.med',
-    role: 'System Administrator',
-    status: 'Active',
-    lastLogin: '11/1/2026',
-    isCurrentUser: true
-  },
-  ...SEED_DOCTORS.map((d) => ({
-    id: d.id,
-    name: d.name,
-    email: d.email || `${d.clinicCode.toLowerCase()}@cardios.eg`,
-    role: 'Cardiologist' as const,
-    status: (d.status === 'active' ? 'Active' : 'Inactive') as 'Active' | 'Inactive',
-    lastLogin: '11/1/2026',
-    licenseNumber: `EGY-MED-${d.id.replace('doc-', '8400')}`
-  })),
-  ...SEED_LABS.map((l) => ({
-    id: l.id,
-    name: l.name,
-    email: l.email || `lab-${l.id}@cardios.eg`,
-    role: 'Lab / Imaging Center' as const,
-    status: 'Active' as const,
-    lastLogin: '11/1/2026',
-    facilityName: l.branch || 'الفرع الرئيسي'
-  })),
-  {
-    id: 'pat-1',
-    name: 'أحمد حسن (مريض)',
-    email: 'patient@cardios.med',
-    role: 'Patient',
-    status: 'Active',
-    lastLogin: '11/1/2026'
-  }
-];
+interface DoctorDirectoryItem {
+  id: string;
+  name: string;
+  clinicName?: string;
+  clinicCode: string;
+  status?: string;
+  staffUids?: string[];
+}
+
+interface ClinicStaffDirectoryItem {
+  id: string;
+  doctorId: string;
+  doctorName?: string;
+  clinicCode?: string;
+  roleTitle?: string;
+}
 
 export default function UserManagement() {
-  const { language, isRTL, t } = useLanguage();
+  const { isRTL, t } = useLanguage();
 
   const [users, setUsers] = useState<UserRecord[]>([]);
+  const [allDoctors, setAllDoctors] = useState<DoctorDirectoryItem[]>([]);
+  const [availableDoctors, setAvailableDoctors] = useState<Array<{ id: string; name: string; clinicCode: string }>>([]);
+  const [staffDirectory, setStaffDirectory] = useState<Record<string, ClinicStaffDirectoryItem>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const debouncedSearch = useDebouncedValue(searchQuery, 250);
   const [selectedRole, setSelectedRole] = useState<string>('All');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
   const reconciledRef = useRef<boolean>(false);
 
   // Modal States
@@ -106,6 +90,7 @@ export default function UserManagement() {
   const [isProvisioning, setIsProvisioning] = useState<boolean>(false);
   const [deleteTargetUser, setDeleteTargetUser] = useState<UserRecord | null>(null);
   const [successMessage, setSuccessMessage] = useState<string>('');
+  const [formError, setFormError] = useState<string>('');
 
   // Form State
   const [formName, setFormName] = useState('');
@@ -115,9 +100,57 @@ export default function UserManagement() {
   const [formStatus, setFormStatus] = useState<'Active' | 'Inactive'>('Active');
   const [formLicense, setFormLicense] = useState('');
   const [formFacility, setFormFacility] = useState('');
+  const [formDoctorId, setFormDoctorId] = useState('');
 
   // Real-time synchronization with Firestore
   useEffect(() => {
+    let unsubDoctors = () => {};
+    let unsubStaff = () => {};
+    try {
+      unsubDoctors = onSnapshot(collection(db, 'doctors'), (snap) => {
+        const allList: DoctorDirectoryItem[] = [];
+        const activeList: Array<{ id: string; name: string; clinicCode: string }> = [];
+        snap.forEach((d) => {
+          const data = d.data() as any;
+          const item: DoctorDirectoryItem = {
+            id: d.id,
+            name: data.name || d.id,
+            clinicName: data.clinicName || '',
+            clinicCode: data.clinicCode || '',
+            status: data.status || 'active',
+            staffUids: Array.isArray(data.staffUids) ? data.staffUids : []
+          };
+          allList.push(item);
+          if (data.status !== 'suspended') {
+            activeList.push({
+              id: d.id,
+              name: item.name,
+              clinicCode: item.clinicCode
+            });
+          }
+        });
+        setAllDoctors(allList);
+        setAvailableDoctors(activeList);
+      });
+    } catch {}
+
+    try {
+      unsubStaff = onSnapshot(collection(db, 'clinic_staff'), (snap) => {
+        const map: Record<string, ClinicStaffDirectoryItem> = {};
+        snap.forEach((d) => {
+          const data = d.data() as any;
+          map[d.id] = {
+            id: d.id,
+            doctorId: data.doctorId || '',
+            doctorName: data.doctorName || '',
+            clinicCode: data.clinicCode || '',
+            roleTitle: data.roleTitle || ''
+          };
+        });
+        setStaffDirectory(map);
+      });
+    } catch {}
+
     try {
       const unsubscribe = onSnapshot(
         collection(db, 'system_users'),
@@ -136,51 +169,142 @@ export default function UserManagement() {
           } else {
             const flags = await getSeedFlags();
             if (!flags.systemUsersSeeded) {
-              const deletedSet = new Set(flags.deletedIds || []);
-              const toSeed = REAL_SYSTEM_USERS.filter((u) => !deletedSet.has(u.id));
-              await markSeedFlags({
-                systemUsersSeeded: true,
-                doctorsSeeded: true,
-                labsSeeded: true
-              });
-              for (const u of toSeed) {
-                await setDoc(doc(db, 'system_users', u.id), u).catch(() => {});
-              }
-              setUsers(toSeed);
-            } else {
-              setUsers([]);
+              await markSeedFlags({ systemUsersSeeded: true });
             }
+            setUsers([]);
           }
           setLoading(false);
         },
         (err) => {
-          console.warn('Firestore subscription fallback for system users:', err);
-          const localFlags = getLocalSeedFlags();
-          if (!localFlags.systemUsersSeeded) {
-            const delSet = new Set(getLocalDeletedIds());
-            setUsers(REAL_SYSTEM_USERS.filter((u) => !delSet.has(u.id)));
-          }
+          console.warn('Firestore subscription warning for system users:', err);
           setLoading(false);
         }
       );
-      return () => unsubscribe();
+      return () => {
+        unsubscribe();
+        unsubDoctors();
+        unsubStaff();
+      };
     } catch (e) {
       console.warn('Error setting up Firestore listener:', e);
       setLoading(false);
+      return () => {
+        unsubDoctors();
+        unsubStaff();
+      };
     }
   }, []);
 
-  // Filtered Users
-  const filteredUsers = users.filter((u) => {
-    const matchesSearch =
-      u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (u.licenseNumber && u.licenseNumber.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (u.facilityName && u.facilityName.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Build resilient lookup maps across all doctors (by ID, clinicCode, and staffUids)
+  const doctorsLookup = useMemo(() => {
+    const byId: Record<string, DoctorDirectoryItem> = {};
+    const byCode: Record<string, DoctorDirectoryItem> = {};
+    const byStaffUid: Record<string, DoctorDirectoryItem> = {};
 
-    const matchesRole = selectedRole === 'All' || u.role === selectedRole;
-    return matchesSearch && matchesRole;
-  });
+    for (const d of allDoctors) {
+      byId[d.id] = d;
+      if (d.clinicCode) {
+        byCode[d.clinicCode.trim().toUpperCase()] = d;
+      }
+      if (Array.isArray(d.staffUids)) {
+        for (const sUid of d.staffUids) {
+          byStaffUid[sUid] = d;
+        }
+      }
+    }
+
+    // Fallback: also allow resolving a Cardiologist directly from system_users if doctors doc is missing
+    for (const u of users) {
+      if (u.role === 'Cardiologist') {
+        if (!byId[u.id]) {
+          byId[u.id] = {
+            id: u.id,
+            name: u.name,
+            clinicCode: u.clinicCode || ''
+          };
+        }
+        if (u.clinicCode && !byCode[u.clinicCode.trim().toUpperCase()]) {
+          byCode[u.clinicCode.trim().toUpperCase()] = byId[u.id];
+        }
+      }
+    }
+
+    return { byId, byCode, byStaffUid };
+  }, [allDoctors, users]);
+
+  const resolveAffiliation = (u: UserRecord) => {
+    if (
+      u.role === 'Cardiologist' ||
+      u.role === 'System Administrator' ||
+      u.role === 'Lab / Imaging Center'
+    ) {
+      return { doctorId: '', doctorName: '', clinicCode: u.clinicCode || '', roleTitle: '' };
+    }
+    const staffFallback = staffDirectory[u.id];
+    const resolvedDocId = u.doctorId || staffFallback?.doctorId || '';
+    const docFromId = resolvedDocId ? doctorsLookup.byId[resolvedDocId] : undefined;
+    const docFromStaffUid = doctorsLookup.byStaffUid[u.id];
+    const resolvedClinicCode =
+      u.clinicCode || staffFallback?.clinicCode || docFromId?.clinicCode || docFromStaffUid?.clinicCode || '';
+    const docFromCode = resolvedClinicCode
+      ? doctorsLookup.byCode[resolvedClinicCode.trim().toUpperCase()]
+      : undefined;
+    const matchedDoc = docFromId || docFromStaffUid || docFromCode;
+    const resolvedDoctorName =
+      u.doctorName || staffFallback?.doctorName || matchedDoc?.name || '';
+    const resolvedRoleTitle = u.roleTitle || staffFallback?.roleTitle || '';
+
+    return {
+      doctorId: resolvedDocId || matchedDoc?.id || '',
+      doctorName: resolvedDoctorName,
+      clinicCode: resolvedClinicCode,
+      roleTitle: resolvedRoleTitle
+    };
+  };
+
+  // Count how many accounts are affiliated with each Cardiologist
+  const affiliatedCountByDoctorId = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const u of users) {
+      if (u.role === 'Cardiologist' || u.role === 'System Administrator') continue;
+      const aff = resolveAffiliation(u);
+      if (aff.doctorId) {
+        counts[aff.doctorId] = (counts[aff.doctorId] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [users, doctorsLookup, staffDirectory]);
+
+  // Filtered Users
+  const filteredUsers = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    return users.filter((u) => {
+      const aff = resolveAffiliation(u);
+      const matchesSearch =
+        !q ||
+        u.name.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        (u.licenseNumber && u.licenseNumber.toLowerCase().includes(q)) ||
+        (u.facilityName && u.facilityName.toLowerCase().includes(q)) ||
+        (u.clinicCode && u.clinicCode.toLowerCase().includes(q)) ||
+        (u.labCode && u.labCode.toLowerCase().includes(q)) ||
+        (aff.doctorName && aff.doctorName.toLowerCase().includes(q)) ||
+        (aff.clinicCode && aff.clinicCode.toLowerCase().includes(q)) ||
+        (aff.roleTitle && aff.roleTitle.toLowerCase().includes(q));
+
+      const matchesRole = selectedRole === 'All' || u.role === selectedRole;
+      return matchesSearch && matchesRole;
+    });
+  }, [users, debouncedSearch, selectedRole, doctorsLookup, staffDirectory]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, selectedRole, pageSize]);
+
+  const paginatedUsers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredUsers.slice(start, start + pageSize);
+  }, [filteredUsers, currentPage, pageSize]);
 
   // Metric Counts
   const totalCount = users.length;
@@ -191,75 +315,111 @@ export default function UserManagement() {
   const activeCount = users.filter((u) => u.status === 'Active').length;
   const inactiveCount = users.filter((u) => u.status === 'Inactive').length;
 
-  // Handle Provision Staff User
+  // Handle Provision Staff User (Real Firebase Auth via Secondary App, NO plaintext passwords in Firestore)
   const handleProvisionUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formName.trim() || !formEmail.trim() || isProvisioning) return;
+    setFormError('');
+    const cleanEmail = formEmail.trim().toLowerCase();
+    if (!formName.trim() || !cleanEmail || isProvisioning) return;
+
+    if (formRole !== 'Patient' && formPassword.trim().length < 6) {
+      setFormError(isRTL ? 'كلمة المرور مطلوبة (6 أحرف على الأقل).' : 'Password is required (min 6 characters).');
+      return;
+    }
+
+    const assignedDoc =
+      formRole === 'Patient' || formRole === 'Clinic Staff'
+        ? availableDoctors.find((d) => d.id === formDoctorId) || availableDoctors[0]
+        : undefined;
+
+    if ((formRole === 'Patient' || formRole === 'Clinic Staff') && !assignedDoc) {
+      setFormError(
+        isRTL
+          ? 'يجب تسجيل واعتماد عيادة طبيب أولاً قبل إضافة مريض أو موظف استقبال.'
+          : 'A registered doctor clinic is required before provisioning a patient or clinic staff.'
+      );
+      return;
+    }
+
     setIsProvisioning(true);
 
-    const stamp = Date.now();
-    const idPrefix =
-      formRole === 'Cardiologist'
-        ? 'doc'
-        : formRole === 'Lab / Imaging Center'
-        ? 'lab'
-        : formRole === 'Patient'
-        ? 'P'
-        : 'usr';
-    const newId = formRole === 'Patient' ? `P${stamp.toString().slice(-6)}` : `${idPrefix}-${stamp}`;
-    const clinicCode = formRole === 'Cardiologist' ? `CLINIC-${stamp.toString().slice(-4)}` : undefined;
-    const labCode = formRole === 'Lab / Imaging Center' ? `LAB-${stamp.toString().slice(-4)}` : undefined;
-    const patientToken = formRole === 'Patient' ? generatePatientToken(newId) : undefined;
-    const cleanPassword = formPassword.trim() || '123456';
-
-    const newUser: UserRecord = {
-      id: newId,
-      name: formName.trim(),
-      email: formEmail.trim(),
-      role: formRole,
-      status: formStatus,
-      lastLogin: new Date().toLocaleDateString('en-US'),
-      ...(formRole !== 'Patient' ? { password: cleanPassword } : {}),
-      ...(formRole === 'Cardiologist'
-        ? { licenseNumber: formLicense.trim() || 'EGY-MED-NEW', clinicCode }
-        : {}),
-      ...(formRole === 'Lab / Imaging Center'
-        ? { facilityName: formFacility.trim() || 'الفرع الرئيسي', labCode }
-        : {}),
-      ...(formRole === 'Patient'
-        ? { patientFileId: newId, patientToken }
-        : {})
-    };
-
     try {
+      const stamp = Date.now();
+      let newId = formRole === 'Patient' ? `P${stamp.toString().slice(-6)}` : '';
+
+      if (formRole !== 'Patient') {
+        newId = await createSecondaryAuthUser(cleanEmail, formPassword.trim(), formName.trim());
+      }
+
+      const clinicCode =
+        formRole === 'Cardiologist'
+          ? `CLINIC-${stamp.toString().slice(-4)}`
+          : assignedDoc?.clinicCode;
+      const labCode = formRole === 'Lab / Imaging Center' ? `LAB-${stamp.toString().slice(-4)}` : undefined;
+      const patientToken = formRole === 'Patient' ? generatePatientToken(newId) : undefined;
+
+      const newUser: UserRecord = {
+        id: newId,
+        name: formName.trim(),
+        email: cleanEmail,
+        role: formRole,
+        status: formStatus,
+        lastLogin: new Date().toLocaleDateString('en-US'),
+        ...(formRole === 'Cardiologist'
+          ? { licenseNumber: formLicense.trim() || 'EGY-MED-NEW', clinicCode }
+          : {}),
+        ...(formRole === 'Lab / Imaging Center'
+          ? { facilityName: formFacility.trim() || 'الفرع الرئيسي', labCode }
+          : {}),
+        ...(formRole === 'Clinic Staff' && assignedDoc
+          ? {
+              doctorId: assignedDoc.id,
+              doctorName: assignedDoc.name,
+              clinicCode: assignedDoc.clinicCode,
+              roleTitle: 'سكرتيرة'
+            }
+          : {}),
+        ...(formRole === 'Patient' && assignedDoc
+          ? {
+              doctorId: assignedDoc.id,
+              doctorName: assignedDoc.name,
+              clinicCode: assignedDoc.clinicCode,
+              patientFileId: newId,
+              patientToken
+            }
+          : {})
+      };
+
       const writes: Promise<any>[] = [
-        setDoc(doc(db, 'system_users', newUser.id), newUser)
+        setDoc(doc(db, 'system_users', newUser.id), newUser),
+        markSeedFlags({ systemUsersSeeded: true })
       ];
 
-      // Keep operational collections (doctors / labs / patients) in sync
       if (formRole === 'Cardiologist' && clinicCode) {
+        const opStatus = formStatus === 'Active' ? 'active' : 'suspended';
         writes.push(
           setDoc(
             doc(db, 'doctors', newUser.id),
             {
               id: newUser.id,
+              uid: newUser.id,
               name: newUser.name,
               clinicCode,
               clinicName: `عيادة ${newUser.name}`,
               specialty: 'استشاري أمراض القلب',
               planId: 'plan-starter',
               planName: 'باقة العيادة الذكية (Cardio Starter)',
-              status: formStatus === 'Active' ? 'active' : 'suspended',
+              status: opStatus,
               subscriptionExpiresAt: '2026-12-31',
               aiQueriesUsed: 0,
               aiQuotaLimit: 120,
               isAiBlocked: false,
               maxPatientsLimit: 50,
-              phone: '01000000000',
+              phone: '',
               email: newUser.email,
-              password: cleanPassword,
               medicalLicenseNumber: newUser.licenseNumber || 'EGY-MED-NEW',
               verificationStatus: formStatus === 'Active' ? 'verified' : 'pending',
+              staffUids: [],
               patientCount: 0,
               prescriptionsIssued: 0,
               echoReportsCount: 0,
@@ -267,93 +427,178 @@ export default function UserManagement() {
             },
             { merge: true }
           ),
-          markSeedFlags({ doctorsSeeded: true, systemUsersSeeded: true })
+          setDoc(
+            doc(db, 'users', newUser.id),
+            {
+              uid: newUser.id,
+              name: newUser.name,
+              email: newUser.email,
+              role: 'doctor',
+              clinicCode,
+              status: opStatus,
+              createdAt: new Date().toISOString()
+            },
+            { merge: true }
+          ),
+          syncDoctorScheduleSummary({
+            doctorId: newUser.id,
+            doctorName: newUser.name,
+            clinicName: `عيادة ${newUser.name}`,
+            clinicCode,
+            specialty: 'استشاري أمراض القلب',
+            status: opStatus
+          })
         );
       } else if (formRole === 'Lab / Imaging Center' && labCode) {
+        const opStatus = formStatus === 'Active' ? 'active' : 'suspended';
         writes.push(
           setDoc(
             doc(db, 'labs', newUser.id),
             {
               id: newUser.id,
+              uid: newUser.id,
               name: newUser.name,
               labCode,
               technicianName: newUser.name,
-              phone: '01000000000',
+              phone: '',
               branch: newUser.facilityName || 'الفرع الرئيسي',
               accreditation: 'معتمد الجودة السريرية',
-              linkedClinics: ['CLINIC-AMMAR-101'],
-              status: formStatus === 'Active' ? 'active' : 'suspended',
+              linkedClinics: [],
+              status: opStatus,
               email: newUser.email,
-              password: cleanPassword,
               testsProcessed: 0
             },
             { merge: true }
           ),
-          markSeedFlags({ labsSeeded: true, systemUsersSeeded: true })
+          setDoc(
+            doc(db, 'users', newUser.id),
+            {
+              uid: newUser.id,
+              name: newUser.name,
+              email: newUser.email,
+              role: 'lab',
+              labCode,
+              status: opStatus,
+              createdAt: new Date().toISOString()
+            },
+            { merge: true }
+          )
         );
-      } else if (formRole === 'Patient' && patientToken) {
+      } else if (formRole === 'Clinic Staff' && assignedDoc) {
+        const opStatus = formStatus === 'Active' ? 'active' : 'suspended';
+        writes.push(
+          setDoc(
+            doc(db, 'clinic_staff', newUser.id),
+            {
+              id: newUser.id,
+              uid: newUser.id,
+              doctorId: assignedDoc.id,
+              doctorName: assignedDoc.name,
+              clinicCode: assignedDoc.clinicCode,
+              name: newUser.name,
+              email: newUser.email,
+              roleTitle: 'سكرتيرة',
+              status: opStatus,
+              createdAt: new Date().toISOString(),
+              createdBy: 'super_admin'
+            },
+            { merge: true }
+          ),
+          setDoc(
+            doc(db, 'users', newUser.id),
+            {
+              uid: newUser.id,
+              name: newUser.name,
+              email: newUser.email,
+              role: 'receptionist',
+              doctorId: assignedDoc.id,
+              doctorName: assignedDoc.name,
+              clinicCode: assignedDoc.clinicCode,
+              status: opStatus,
+              createdAt: new Date().toISOString()
+            },
+            { merge: true }
+          ),
+          setDoc(
+            doc(db, 'doctors', assignedDoc.id),
+            { staffUids: arrayUnion(newUser.id) },
+            { merge: true }
+          )
+        );
+      } else if (formRole === 'System Administrator') {
+        writes.push(
+          setDoc(
+            doc(db, 'admins', newUser.id),
+            {
+              uid: newUser.id,
+              name: newUser.name,
+              email: newUser.email,
+              role: 'super_admin',
+              active: formStatus === 'Active',
+              createdAt: new Date().toISOString()
+            },
+            { merge: true }
+          )
+        );
+      } else if (formRole === 'Patient' && patientToken && assignedDoc) {
         writes.push(
           setDoc(
             doc(db, 'patients', newId),
             {
               id: newId,
-              doctorId: 'doc-1',
-              clinicCode: 'CLINIC-AMMAR-101',
+              doctorId: assignedDoc.id,
+              doctorName: assignedDoc.name,
+              clinicCode: assignedDoc.clinicCode,
               name: newUser.name,
               nameEn: newUser.name,
               email: newUser.email,
-              dob: '1980-01-01',
-              age: 45,
-              gender: 'ذكر',
-              status: 'مستقر (تحت المتابعة الدورية)',
+              status: 'تحت المتابعة الدورية',
               diagnosis: 'متابعة قلبية دورية',
-              ef: 55,
               securityToken: patientToken,
               accessToken: patientToken,
-              createdAt: new Date().toISOString(),
-              labs: {
-                ldl: '95 mg/dL',
-                hdl: '45 mg/dL',
-                creatinine: '0.9 mg/dL',
-                egfr: '90 mL/min',
-                potassium: '4.3 mmol/L',
-                hba1c: '5.7%'
-              }
+              createdAt: new Date().toISOString()
             },
             { merge: true }
-          ),
-          markSeedFlags({ systemUsersSeeded: true })
+          )
         );
-      } else {
-        writes.push(markSeedFlags({ systemUsersSeeded: true }));
       }
 
       await Promise.all(writes);
-    } catch (err) {
-      console.warn('Local update fallback for provision:', err);
+
+      setUsers((prev) => (prev.some((u) => u.id === newUser.id) ? prev : [newUser, ...prev]));
+      setIsProvisionModalOpen(false);
+      setFormName('');
+      setFormEmail('');
+      setFormPassword('');
+      setFormLicense('');
+      setFormFacility('');
+      setFormDoctorId('');
+
+      const credentialInfo =
+        formRole === 'Patient'
+          ? ` | رقم الملف: #${newId} | رمز الأمان: ${patientToken}`
+          : formRole === 'Cardiologist'
+          ? ` | كود العيادة: ${clinicCode}`
+          : formRole === 'Lab / Imaging Center'
+          ? ` | كود المعمل: ${labCode}`
+          : formRole === 'Clinic Staff' && assignedDoc
+          ? ` | العيادة: ${assignedDoc.name}`
+          : '';
+
+      setSuccessMessage(`${t('accountCreatedSuccess')}${credentialInfo}`);
+      setTimeout(() => setSuccessMessage(''), 8000);
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code === 'auth/email-already-in-use') {
+        setFormError(isRTL ? 'هذا البريد الإلكتروني مسجل مسبقاً في Firebase Auth.' : 'This email is already registered in Firebase Auth.');
+      } else if (code === 'auth/operation-not-allowed') {
+        setFormError(isRTL ? 'توفير الحسابات بالبريد وكلمة المرور يتطلب تفعيل Email/Password في Firebase Authentication.' : 'Email/Password sign-up must be enabled in Firebase Authentication.');
+      } else {
+        setFormError(err?.message || (isRTL ? 'تعذر إنشاء الحساب.' : 'Failed to provision user.'));
+      }
     } finally {
       setIsProvisioning(false);
     }
-
-    setUsers((prev) => (prev.some((u) => u.id === newUser.id) ? prev : [newUser, ...prev]));
-    setIsProvisionModalOpen(false);
-    setFormName('');
-    setFormEmail('');
-    setFormPassword('');
-    setFormLicense('');
-    setFormFacility('');
-
-    const credentialInfo =
-      formRole === 'Patient'
-        ? ` | رقم الملف: #${newId} | رمز الأمان: ${patientToken}`
-        : formRole === 'Cardiologist'
-        ? ` | كود العيادة: ${clinicCode} | كلمة المرور: ${cleanPassword}`
-        : formRole === 'Lab / Imaging Center'
-        ? ` | كود المعمل: ${labCode} | كلمة المرور: ${cleanPassword}`
-        : '';
-
-    setSuccessMessage(`${t('accountCreatedSuccess')}${credentialInfo}`);
-    setTimeout(() => setSuccessMessage(''), 8000);
   };
 
   // Confirm Delete User (Synchronized across system_users, doctors, labs, users & localStorage)
@@ -423,29 +668,32 @@ export default function UserManagement() {
             {t('rolePatient')}
           </span>
         );
+      case 'Clinic Staff':
+        return (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-600 text-white shadow-xs">
+            <UserCheck className="w-3.5 h-3.5" />
+            {isRTL ? 'سكرتارية / تمريض' : 'Clinic Staff'}
+          </span>
+        );
     }
   };
 
   // Role Avatar Icon / Initials Badge (Clean & Professional without random photo stock)
   const renderUserAvatar = (user: UserRecord) => {
-    // Get initial letter
     const initial = user.name.replace(/^(د\/|م\/|أ\/)\s*/, '').charAt(0) || 'U';
 
     let bgColor = 'bg-slate-100 text-slate-700 border-slate-300';
-    let IconComponent = User;
 
     if (user.role === 'Cardiologist') {
       bgColor = 'bg-rose-100 text-rose-700 border-rose-300';
-      IconComponent = Stethoscope;
     } else if (user.role === 'System Administrator') {
       bgColor = 'bg-indigo-100 text-indigo-700 border-indigo-300';
-      IconComponent = Shield;
     } else if (user.role === 'Lab / Imaging Center') {
       bgColor = 'bg-teal-100 text-teal-700 border-teal-300';
-      IconComponent = FlaskConical;
     } else if (user.role === 'Patient') {
       bgColor = 'bg-blue-100 text-blue-700 border-blue-300';
-      IconComponent = Heart;
+    } else if (user.role === 'Clinic Staff') {
+      bgColor = 'bg-amber-100 text-amber-700 border-amber-300';
     }
 
     return (
@@ -589,7 +837,7 @@ export default function UserManagement() {
           >
             <option value="All">{t('allRoles')}</option>
             <option value="Cardiologist">{t('roleCardiologist')}</option>
-            <option value="System Administrator">{t('roleSystemAdmin')}</option>
+            <option value="Clinic Staff">{isRTL ? 'سكرتارية / تمريض' : 'Clinic Staff'}</option>
             <option value="Lab / Imaging Center">{t('roleLabCenter')}</option>
             <option value="Patient">{t('rolePatient')}</option>
           </select>
@@ -618,7 +866,12 @@ export default function UserManagement() {
                   </td>
                 </tr>
               ) : (
-                filteredUsers.map((user) => (
+                paginatedUsers.map((user) => {
+                  const affiliation = resolveAffiliation(user);
+                  const affiliatedStaffCount =
+                    user.role === 'Cardiologist' ? affiliatedCountByDoctorId[user.id] || 0 : 0;
+
+                  return (
                   <tr
                     key={user.id}
                     className="hover:bg-slate-50/60 transition-colors group"
@@ -652,13 +905,62 @@ export default function UserManagement() {
                               ملف #{user.patientFileId || user.id} • رمز QR: {user.patientToken}
                             </div>
                           )}
+                          {(affiliation.doctorName || affiliation.clinicCode) && (
+                            <div className="mt-1.5 inline-flex flex-wrap items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200/80 text-[11px] font-semibold text-amber-900">
+                              <Stethoscope className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                              <span>
+                                {isRTL ? 'تابع للدكتور:' : 'Affiliated to:'}{' '}
+                                <strong className="font-bold text-slate-900">
+                                  {affiliation.doctorName
+                                    ? isRTL
+                                      ? `د. ${affiliation.doctorName}`
+                                      : `Dr. ${affiliation.doctorName}`
+                                    : isRTL
+                                    ? 'عيادة مرتبطة'
+                                    : 'Linked Clinic'}
+                                </strong>
+                              </span>
+                              {affiliation.clinicCode && (
+                                <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-white/90 border border-amber-200 text-amber-800">
+                                  {affiliation.clinicCode}
+                                </span>
+                              )}
+                              {affiliation.roleTitle && (
+                                <span className="text-[10px] text-amber-700">
+                                  ({affiliation.roleTitle})
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {user.role === 'Cardiologist' && affiliatedStaffCount > 0 && (
+                            <div className="mt-1 text-[11px] font-semibold text-amber-700 flex items-center gap-1">
+                              <UserCheck className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                              <span>
+                                {isRTL
+                                  ? `يتبع هذه العيادة ${affiliatedStaffCount} حساب موظف/تابع`
+                                  : `${affiliatedStaffCount} affiliated clinic account(s)`}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>
 
                     {/* Role Badge */}
                     <td className="py-4 px-6 whitespace-nowrap">
-                      {getRoleBadge(user.role)}
+                      <div className="flex flex-col items-start gap-1.5">
+                        {getRoleBadge(user.role)}
+                        {affiliation.doctorName && (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600">
+                            <Stethoscope className="w-3 h-3 text-rose-500 shrink-0" />
+                            <span>
+                              {isRTL
+                                ? `تابع لـ د. ${affiliation.doctorName}`
+                                : `Under Dr. ${affiliation.doctorName}`}
+                            </span>
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* Status Pill */}
@@ -702,10 +1004,22 @@ export default function UserManagement() {
                       )}
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
+        </div>
+        <div className="px-6 pb-4">
+          <PaginationControls
+            currentPage={currentPage}
+            totalItems={filteredUsers.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+            itemLabelAr="مستخدم"
+            itemLabelEn="users"
+          />
         </div>
       </div>
 
@@ -756,7 +1070,7 @@ export default function UserManagement() {
                   required
                   value={formEmail}
                   onChange={(e) => setFormEmail(e.target.value)}
-                  placeholder="khalid@cardios.med"
+                  placeholder="doctor@cardios.eg"
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
                 />
               </div>
@@ -772,26 +1086,59 @@ export default function UserManagement() {
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 font-medium"
                 >
                   <option value="Cardiologist">{t('roleCardiologist')}</option>
-                  <option value="System Administrator">{t('roleSystemAdmin')}</option>
+                  <option value="Clinic Staff">{isRTL ? 'سكرتارية / تمريض العيادة' : 'Clinic Staff (Reception/Nurse)'}</option>
                   <option value="Lab / Imaging Center">{t('roleLabCenter')}</option>
                   <option value="Patient">{t('rolePatient')}</option>
                 </select>
               </div>
 
-              {/* Password Field for login testing */}
+              {/* Password Field */}
               {formRole !== 'Patient' && (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    {isRTL ? 'كلمة المرور للدخول (اختياري - الافتراضي 123456)' : 'Account Password (default: 123456)'}
+                    {isRTL ? 'كلمة المرور للدخول (6 أحرف على الأقل) *' : 'Account Password (min 6 chars) *'}
                   </label>
                   <input
-                    type="text"
+                    type="password"
+                    required
+                    minLength={6}
                     value={formPassword}
                     onChange={(e) => setFormPassword(e.target.value)}
-                    placeholder="123456"
+                    placeholder="••••••••"
                     dir="ltr"
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500/20"
                   />
+                </div>
+              )}
+
+              {/* Doctor selector for Patient or Clinic Staff */}
+              {(formRole === 'Patient' || formRole === 'Clinic Staff') && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {isRTL ? 'العيادة المرتبطة *' : 'Assigned Clinic *'}
+                  </label>
+                  <select
+                    value={formDoctorId || availableDoctors[0]?.id || ''}
+                    onChange={(e) => setFormDoctorId(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 font-medium"
+                  >
+                    {availableDoctors.length === 0 ? (
+                      <option value="">{isRTL ? 'لا توجد عيادات مسجلة بعد' : 'No clinics registered yet'}</option>
+                    ) : (
+                      availableDoctors.map((docItem) => (
+                        <option key={docItem.id} value={docItem.id}>
+                          {docItem.name} ({docItem.clinicCode})
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+              )}
+
+              {formError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
                 </div>
               )}
 

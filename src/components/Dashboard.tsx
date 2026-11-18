@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, doc, onSnapshot, getDoc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { collection, getDocs, doc, onSnapshot, getDoc, query, where } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
+import { db, auth } from '../lib/firebase';
 import {
   Activity,
   Users,
@@ -25,9 +26,10 @@ import {
   Building2,
   Sparkles,
   Calculator,
-  User
+  User,
+  Wallet,
+  UserPlus
 } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
 import { useLanguage, LanguageSwitcher } from '../context/LanguageContext';
 import PatientTable from './PatientTable';
 import PatientProfile from './PatientProfile';
@@ -43,33 +45,20 @@ import DoctorAnalyticsPanel from './DoctorAnalyticsPanel';
 import DoctorSettingsModal from './DoctorSettingsModal';
 import ClinicalCalculatorsModal from './ClinicalCalculatorsModal';
 import UserProfileModal from './UserProfileModal';
+import ClinicCashboxPanel from './ClinicCashboxPanel';
+import ClinicStaffModal from './ClinicStaffModal';
+import { PWAInstallButton } from './PWAInstallButton';
 import { DoctorScheduleSettings } from '../types/appointment';
-
-const PRESET_DOCTORS = [
-  {
-    id: 'doc-1',
-    name: 'د/ عمار محمود',
-    clinicName: 'عيادة أمراض القلب والقسطرة',
-    clinicCode: 'CLINIC-AMMAR-101',
-    specialty: 'استشاري أمراض القلب والقسطرة التداخلية',
-    patientIds: ['1', '2', '3']
-  },
-  {
-    id: 'doc-2',
-    name: 'د/ شريف عبد الهادي',
-    clinicName: 'مركز القاهرة لرعاية القلب',
-    clinicCode: 'CLINIC-SHERIF-202',
-    specialty: 'استشاري جراحة وقصور القلب',
-    patientIds: ['4', '5']
-  }
-];
+import { StaffRole } from '../types/clinic';
 
 export default function Dashboard({
   onLogout,
   onBackToLanding,
-  doctorId: initialDoctorId = 'doc-1',
-  doctorName: initialDoctorName = 'د/ عمار محمود',
-  clinicCode: initialClinicCode = 'CLINIC-AMMAR-101',
+  doctorId: initialDoctorId = '',
+  doctorName: initialDoctorName = '',
+  clinicCode: initialClinicCode = '',
+  staffRole = 'doctor',
+  staffName = '',
   onOpenAdminPortal
 }: {
   onLogout?: () => void;
@@ -78,18 +67,30 @@ export default function Dashboard({
   doctorId?: string;
   doctorName?: string;
   clinicCode?: string;
+  staffRole?: StaffRole;
+  staffName?: string;
 }) {
   const { language, direction, isRTL, t } = useLanguage();
+  const isReceptionist = staffRole === 'receptionist';
   const [currentDoctorId, setCurrentDoctorId] = useState<string>(initialDoctorId);
   const [currentDoctorName, setCurrentDoctorName] = useState<string>(initialDoctorName);
   const [currentClinicCode, setCurrentClinicCode] = useState<string>(initialClinicCode);
-  const [currentClinicName, setCurrentClinicName] = useState<string>('عيادة أمراض القلب والقسطرة');
-  const [currentSpecialty, setCurrentSpecialty] = useState<string>('استشاري أمراض القلب والقسطرة التداخلية');
+  const [currentClinicName, setCurrentClinicName] = useState<string>(
+    initialDoctorName ? `عيادة ${initialDoctorName}` : 'عيادة أمراض القلب والقسطرة'
+  );
+  const [currentSpecialty, setCurrentSpecialty] = useState<string>('استشاري أمراض القلب والأوعية الدموية');
   const [clinicLogoUrl, setClinicLogoUrl] = useState<string>('');
   const [clinicLogoIcon, setClinicLogoIcon] = useState<string>('HeartPulse');
+  const [staffUids, setStaffUids] = useState<string[]>([]);
+  const [authUid, setAuthUid] = useState<string>(() => auth.currentUser?.uid || '');
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setAuthUid(u?.uid || ''));
+    return () => unsub();
+  }, []);
 
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'patients' | 'reports' | 'messages' | 'calendar' | 'analytics' | 'patientPortal'>('patients');
+  const [activeTab, setActiveTab] = useState<'patients' | 'reports' | 'messages' | 'calendar' | 'analytics' | 'cashbox' | 'patientPortal'>('patients');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const [showNewPatient, setShowNewPatient] = useState(false);
@@ -98,6 +99,7 @@ export default function Dashboard({
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showClinicalCalculators, setShowClinicalCalculators] = useState(false);
   const [showUserProfileModal, setShowUserProfileModal] = useState(false);
+  const [showClinicStaffModal, setShowClinicStaffModal] = useState(false);
   const [clinicDrawerOpen, setClinicDrawerOpen] = useState(false);
 
   // Doctor account status & AI governance
@@ -117,18 +119,24 @@ export default function Dashboard({
 
   const [doctorEmail, setDoctorEmail] = useState<string>('');
   const [doctorPhone, setDoctorPhone] = useState<string>('');
-  const [doctorPatients, setDoctorPatients] = useState<Array<{ id: string; name: string }>>([]);
+  const [doctorPatients, setDoctorPatients] = useState<Array<{ id: string; name: string; phone?: string }>>([]);
   const [patientsRefreshKey, setPatientsRefreshKey] = useState<number>(0);
+
+  // Guard activeTab if receptionist opens a restricted tab
+  useEffect(() => {
+    if (isReceptionist && (activeTab === 'analytics' || activeTab === 'reports')) {
+      setActiveTab('patients');
+    }
+  }, [isReceptionist, activeTab]);
 
   // Sync props when switching logged-in doctor accounts without unmounting
   useEffect(() => {
     setCurrentDoctorId(initialDoctorId);
     setCurrentDoctorName(initialDoctorName);
     setCurrentClinicCode(initialClinicCode);
-    const preset = PRESET_DOCTORS.find((d) => d.id === initialDoctorId);
-    setCurrentClinicName(preset ? preset.clinicName : `عيادة ${initialDoctorName}`);
-    setCurrentSpecialty(preset ? preset.specialty : 'استشاري أمراض القلب');
-    setDoctorEmail(preset ? `${preset.clinicCode.toLowerCase()}@cardios.eg` : '');
+    setCurrentClinicName(initialDoctorName ? `عيادة ${initialDoctorName}` : 'عيادة أمراض القلب والقسطرة');
+    setCurrentSpecialty('استشاري أمراض القلب والأوعية الدموية');
+    setDoctorEmail('');
     setDoctorPhone('');
     setSelectedPatientId(null);
     setDoctorStatus('active');
@@ -147,34 +155,9 @@ export default function Dashboard({
     urgent: boolean;
   }>>([]);
 
-  const isDemoSession = currentDoctorId === 'doc-1' || currentDoctorId === 'doc-2';
-
   useEffect(() => {
-    if (isDemoSession) {
-      setMessagesList([
-        {
-          id: 'm1',
-          sender: 'معمل النيل التخصصي للتحاليل',
-          role: 'lab',
-          time: 'منذ 10 دقائق',
-          patientName: 'أحمد حسن (#1)',
-          text: 'تم رفع نتيجة تحليل Lipid Profile كاملة. الكوليسترول الكلي 240 mg/dL (مرتفع نسبياً).',
-          urgent: true
-        },
-        {
-          id: 'm2',
-          sender: 'نظام المراقبة المنزلية (RPM)',
-          role: 'system',
-          time: 'منذ ساعة',
-          patientName: 'فاطمة علي (#2)',
-          text: 'تنبيه: سجلت المريضة قراءة ضغط دم 155/95 mmHg مع نبض 92. تم إرسال توصية بمراجعة الجرعة.',
-          urgent: true
-        }
-      ]);
-    } else {
-      setMessagesList([]);
-    }
-  }, [isDemoSession, currentDoctorId]);
+    setMessagesList([]);
+  }, [currentDoctorId]);
 
   // Real-time listener for current doctor schedule & logo settings
   useEffect(() => {
@@ -199,18 +182,9 @@ export default function Dashboard({
     fetchScheduleSettings();
   }, [currentDoctorId, showSettingsModal]);
 
-  // Real-time listener for doctor account status
+  // Real-time listener for doctor account status & clinic staff UIDs
   useEffect(() => {
     if (!currentDoctorId) return;
-
-    try {
-      const localStatus = localStorage.getItem(`cardios_doctor_status_${currentDoctorId}`);
-      if (localStatus) setDoctorStatus(localStatus as any);
-      const localBlocked = localStorage.getItem(`cardios_ai_blocked_${currentDoctorId}`);
-      if (localBlocked !== null) setIsAiBlocked(localBlocked === 'true');
-    } catch (e) {
-      console.warn('LocalStorage error:', e);
-    }
 
     const unsubDoc = onSnapshot(doc(db, 'doctors', currentDoctorId), (snap) => {
       if (snap.exists()) {
@@ -221,14 +195,9 @@ export default function Dashboard({
         if (d.clinicCode) setCurrentClinicCode(d.clinicCode);
         if (d.email) setDoctorEmail(d.email);
         if (d.phone) setDoctorPhone(d.phone);
-        if (d.status) {
-          setDoctorStatus(d.status);
-          localStorage.setItem(`cardios_doctor_status_${currentDoctorId}`, d.status);
-        }
-        if (d.isAiBlocked !== undefined) {
-          setIsAiBlocked(!!d.isAiBlocked);
-          localStorage.setItem(`cardios_ai_blocked_${currentDoctorId}`, String(!!d.isAiBlocked));
-        }
+        if (Array.isArray(d.staffUids)) setStaffUids(d.staffUids);
+        if (d.status) setDoctorStatus(d.status);
+        if (d.isAiBlocked !== undefined) setIsAiBlocked(!!d.isAiBlocked);
         if (d.aiQueriesUsed !== undefined) setAiQueriesUsed(d.aiQueriesUsed);
         if (d.aiQuotaLimit !== undefined) setAiQuotaLimit(d.aiQuotaLimit);
       }
@@ -242,39 +211,56 @@ export default function Dashboard({
   // Fetch doctor patients & real statistics
   useEffect(() => {
     const fetchDoctorPatientsAndStats = async () => {
+      if (!currentDoctorId || !authUid) {
+        setDoctorPatients([]);
+        setRealStats({
+          activePatients: 0,
+          pendingLabs: 0,
+          rpmAlerts: 0,
+          todayAppointments: 0,
+          completedAppointments: 0
+        });
+        return;
+      }
+
       try {
-        const pSnap = await getDocs(collection(db, 'patients'));
+        const pQ = isReceptionist
+          ? query(collection(db, 'patients'), where('staffUids', 'array-contains', authUid))
+          : query(collection(db, 'patients'), where('doctorId', '==', currentDoctorId));
+        const aQ = isReceptionist
+          ? query(collection(db, 'appointments'), where('staffUids', 'array-contains', authUid))
+          : query(collection(db, 'appointments'), where('doctorId', '==', currentDoctorId));
+
+        const [pSnap, aSnap] = await Promise.all([getDocs(pQ), getDocs(aQ)]);
+
         const docPatients = pSnap.docs
           .map(d => ({ id: d.id, ...d.data() }))
-          .filter((p: any) => p.doctorId ? p.doctorId === currentDoctorId : currentDoctorId === 'doc-1');
+          .filter((p: any) => !isReceptionist || p.doctorId === currentDoctorId);
 
-        setDoctorPatients(docPatients.map((p: any) => ({ id: p.id, name: p.name || `مريض #${p.id}` })));
+        setDoctorPatients(docPatients.map((p: any) => ({ id: p.id, name: p.name || `مريض #${p.id}`, phone: p.phone || '' })));
 
-        if (!isDemoSession) {
-          const activeCount = docPatients.length;
-          const labCount = docPatients.filter((p: any) => p.status?.includes('تحاليل') || p.status?.includes('فحص')).length;
-          const alertsCount = docPatients.filter((p: any) => p.status?.includes('تنبيه') || (p.ef && p.ef < 40)).length;
+        const activeCount = docPatients.length;
+        const labCount = docPatients.filter((p: any) => p.status?.includes('تحاليل') || p.status?.includes('فحص')).length;
+        const alertsCount = docPatients.filter((p: any) => p.status?.includes('تنبيه') || (p.ef && p.ef < 40)).length;
 
-          const aSnap = await getDocs(collection(db, 'appointments'));
-          const docAppointments = aSnap.docs
-            .map(d => ({ id: d.id, ...d.data() }))
-            .filter((a: any) => a.doctorId === currentDoctorId);
+        const docAppointments = aSnap.docs
+          .map(d => ({ id: d.id, ...d.data() }))
+          .filter((a: any) => !isReceptionist || a.doctorId === currentDoctorId);
 
-          setRealStats({
-            activePatients: activeCount,
-            pendingLabs: labCount,
-            rpmAlerts: alertsCount,
-            todayAppointments: docAppointments.length,
-            completedAppointments: docAppointments.filter((a: any) => a.status === 'Completed').length
-          });
-        }
+        setRealStats({
+          activePatients: activeCount,
+          pendingLabs: labCount,
+          rpmAlerts: alertsCount,
+          todayAppointments: docAppointments.length,
+          completedAppointments: docAppointments.filter((a: any) => a.status === 'Completed').length
+        });
       } catch (err) {
         console.error('Error fetching doctor stats:', err);
       }
     };
 
     fetchDoctorPatientsAndStats();
-  }, [currentDoctorId, isDemoSession, showNewPatient, patientsRefreshKey]);
+  }, [currentDoctorId, showNewPatient, patientsRefreshKey, isReceptionist, authUid]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -371,26 +357,23 @@ export default function Dashboard({
         onBack={() => setSelectedPatientId(null)}
         isAiBlocked={effectiveAiBlocked}
         aiBlockedReason={isAiBlocked ? 'تم إيقاف خدمة الذكاء الاصطناعي لهذه العيادة من قبل المشرف العام (Super Admin).' : 'تم استنفاد كوتة الاستعلامات الشهرية للباقة الحالية.'}
+        doctorId={currentDoctorId}
+        doctorName={currentDoctorName}
+        clinicName={currentClinicName}
+        clinicPhone={doctorPhone}
+        specialty={currentSpecialty}
+        staffRole={staffRole}
+        staffName={staffName}
+        staffUids={staffUids}
       />
     );
   }
 
   // Stats values
-  const activePatientsVal = isDemoSession
-    ? (currentDoctorId === 'doc-1' ? '124' : '85')
-    : `${realStats.activePatients}`;
-
-  const pendingLabsVal = isDemoSession
-    ? (currentDoctorId === 'doc-1' ? '8' : '4')
-    : `${realStats.pendingLabs}`;
-
-  const rpmAlertsVal = isDemoSession
-    ? (currentDoctorId === 'doc-1' ? '3' : '1')
-    : `${realStats.rpmAlerts}`;
-
-  const appointmentsVal = isDemoSession
-    ? (currentDoctorId === 'doc-1' ? '15' : '8')
-    : `${realStats.todayAppointments}`;
+  const activePatientsVal = `${realStats.activePatients}`;
+  const pendingLabsVal = `${realStats.pendingLabs}`;
+  const rpmAlertsVal = `${realStats.rpmAlerts}`;
+  const appointmentsVal = `${realStats.todayAppointments}`;
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans flex flex-col lg:flex-row text-slate-800" dir={direction}>
@@ -436,29 +419,45 @@ export default function Dashboard({
               {!sidebarCollapsed && <span className="whitespace-nowrap">{t('medicalRecords')}</span>}
             </button>
 
-            <button
-              onClick={() => setActiveTab('analytics')}
-              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-xs font-bold transition-all ${
-                activeTab === 'analytics'
-                  ? 'bg-teal-50 text-teal-700 border border-teal-200/80 shadow-xs'
-                  : 'text-slate-600 hover:bg-slate-100/80 hover:text-slate-900'
-              }`}
-            >
-              <BarChart3 size={18} className={activeTab === 'analytics' ? 'text-teal-600' : 'text-slate-400'} />
-              {!sidebarCollapsed && <span className="whitespace-nowrap">{t('analytics')}</span>}
-            </button>
+            {!isReceptionist && (
+              <button
+                onClick={() => setActiveTab('analytics')}
+                className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'analytics'
+                    ? 'bg-teal-50 text-teal-700 border border-teal-200/80 shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100/80 hover:text-slate-900'
+                }`}
+              >
+                <BarChart3 size={18} className={activeTab === 'analytics' ? 'text-teal-600' : 'text-slate-400'} />
+                {!sidebarCollapsed && <span className="whitespace-nowrap">{t('analytics')}</span>}
+              </button>
+            )}
 
             <button
-              onClick={() => setActiveTab('reports')}
-              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-xs font-bold transition-all ${
-                activeTab === 'reports'
-                  ? 'bg-blue-50 text-blue-700 border border-blue-200/80 shadow-xs'
+              onClick={() => setActiveTab('cashbox')}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'cashbox'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-xs'
                   : 'text-slate-600 hover:bg-slate-100/80 hover:text-slate-900'
               }`}
             >
-              <FileText size={18} className={activeTab === 'reports' ? 'text-blue-600' : 'text-slate-400'} />
-              {!sidebarCollapsed && <span className="whitespace-nowrap">{t('reports')}</span>}
+              <Wallet size={18} className={activeTab === 'cashbox' ? 'text-emerald-600' : 'text-slate-400'} />
+              {!sidebarCollapsed && <span className="whitespace-nowrap">الخزينة والتعاقدات</span>}
             </button>
+
+            {!isReceptionist && (
+              <button
+                onClick={() => setActiveTab('reports')}
+                className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+                  activeTab === 'reports'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200/80 shadow-xs'
+                    : 'text-slate-600 hover:bg-slate-100/80 hover:text-slate-900'
+                }`}
+              >
+                <FileText size={18} className={activeTab === 'reports' ? 'text-blue-600' : 'text-slate-400'} />
+                {!sidebarCollapsed && <span className="whitespace-nowrap">{t('reports')}</span>}
+              </button>
+            )}
 
             <button
               onClick={() => setActiveTab('messages')}
@@ -512,25 +511,37 @@ export default function Dashboard({
           {/* Quick Actions */}
           {!sidebarCollapsed && (
             <div className="pt-4 border-t border-slate-100 space-y-2">
-              <button
-                onClick={() => setShowSettingsModal(true)}
-                className="w-full py-2.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
-              >
-                <Settings size={15} className="text-amber-600" />
-                <span>الإعدادات</span>
-              </button>
+              {!isReceptionist && (
+                <>
+                  <button
+                    onClick={() => setShowClinicStaffModal(true)}
+                    className="w-full py-2.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200/80 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <UserPlus size={15} className="text-indigo-600" />
+                    <span>طاقم العيادة ({staffUids.length})</span>
+                  </button>
 
-              <button
-                onClick={() => setShowPrescriptionModal(true)}
-                className="w-full py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
-              >
-                <Pill size={15} />
-                <span>الروشتة الذكية</span>
-              </button>
+                  <button
+                    onClick={() => setShowSettingsModal(true)}
+                    className="w-full py-2.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Settings size={15} className="text-amber-600" />
+                    <span>الإعدادات</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowPrescriptionModal(true)}
+                    className="w-full py-2.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/80 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Pill size={15} />
+                    <span>الروشتة الذكية</span>
+                  </button>
+                </>
+              )}
 
               <button
                 onClick={() => setShowNewPatient(true)}
-                className="w-full py-2.5 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2"
+                className="w-full py-2.5 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-2 cursor-pointer"
               >
                 <Plus size={16} />
                 <span>إضافة مريض جديد</span>
@@ -542,7 +553,7 @@ export default function Dashboard({
         {/* User Profile */}
         <div className="p-4 border-t border-slate-100 bg-slate-50/50">
           <button
-            onClick={() => setShowSettingsModal(true)}
+            onClick={() => !isReceptionist && setShowSettingsModal(true)}
             className="w-full flex items-center gap-3 text-right hover:bg-white p-2 rounded-xl transition-all"
           >
             <div className="w-8 h-8 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center font-bold text-xs shrink-0 overflow-hidden">
@@ -550,8 +561,12 @@ export default function Dashboard({
             </div>
             {!sidebarCollapsed && (
               <div className="overflow-hidden">
-                <span className="block text-xs font-bold text-slate-900 truncate">{currentDoctorName}</span>
-                <span className="block text-[10px] text-teal-700 font-bold truncate">انقر فتح الإعدادات</span>
+                <span className="block text-xs font-bold text-slate-900 truncate">
+                  {isReceptionist ? (staffName || 'الاستقبال / التمريض') : currentDoctorName}
+                </span>
+                <span className="block text-[10px] text-teal-700 font-bold truncate">
+                  {isReceptionist ? 'صلاحية استقبال وتمريض' : 'انقر فتح الإعدادات'}
+                </span>
               </div>
             )}
           </button>
@@ -567,13 +582,18 @@ export default function Dashboard({
               {renderDashboardLogo()}
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-base sm:text-lg font-black text-slate-900">
                   {currentClinicName}
                 </h1>
                 <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md border border-slate-200">
                   {currentClinicCode}
                 </span>
+                {isReceptionist && (
+                  <span className="text-[10px] font-bold bg-indigo-50 text-indigo-800 px-2.5 py-0.5 rounded-full border border-indigo-200">
+                    استقبال / تمريض: {staffName || 'فريق العيادة'}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 {currentDoctorName} · {currentSpecialty}
@@ -582,40 +602,65 @@ export default function Dashboard({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <PWAInstallButton />
             <LanguageSwitcher />
 
-            <button
-              onClick={() => setShowClinicalCalculators(true)}
-              className="px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
-              title={t('clinicalCalculators')}
-            >
-              <Calculator size={15} className="text-blue-600" />
-              <span>{t('clinicalCalculators')}</span>
-            </button>
+            {!isReceptionist && (
+              <>
+                <button
+                  onClick={() => setShowClinicalCalculators(true)}
+                  className="px-3.5 py-2 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  title={t('clinicalCalculators')}
+                >
+                  <Calculator size={15} className="text-blue-600" />
+                  <span>{t('clinicalCalculators')}</span>
+                </button>
+
+                <button
+                  onClick={() => setShowPrescriptionModal(true)}
+                  className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                >
+                  <Pill size={15} className="text-emerald-600" />
+                  <span>{t('digitalPrescription')}</span>
+                </button>
+
+                <button
+                  onClick={() => setShowClinicStaffModal(true)}
+                  className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                >
+                  <UserPlus size={15} className="text-indigo-600" />
+                  <span>طاقم العيادة</span>
+                </button>
+
+                <button
+                  onClick={() => setShowSettingsModal(true)}
+                  className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                >
+                  <Settings size={15} className="text-amber-600" />
+                  <span>{t('settings')}</span>
+                </button>
+
+                <button
+                  onClick={() => setShowUserProfileModal(true)}
+                  className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  title="الملف الشخصي وإعدادات الحساب"
+                >
+                  <User size={15} className="text-purple-600" />
+                  <span>الملف الشخصي</span>
+                </button>
+              </>
+            )}
 
             <button
-              onClick={() => setShowPrescriptionModal(true)}
-              className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+              onClick={() => setActiveTab('cashbox')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs border cursor-pointer ${
+                activeTab === 'cashbox'
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-emerald-200/80'
+              }`}
             >
-              <Pill size={15} className="text-emerald-600" />
-              <span>{t('digitalPrescription')}</span>
-            </button>
-
-            <button
-              onClick={() => setShowSettingsModal(true)}
-              className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs"
-            >
-              <Settings size={15} className="text-amber-600" />
-              <span>{t('settings')}</span>
-            </button>
-
-            <button
-              onClick={() => setShowUserProfileModal(true)}
-              className="px-3.5 py-2 bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200/80 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
-              title="الملف الشخصي وإعدادات الحساب"
-            >
-              <User size={15} className="text-purple-600" />
-              <span>الملف الشخصي</span>
+              <Wallet size={15} className={activeTab === 'cashbox' ? 'text-white' : 'text-emerald-600'} />
+              <span>الخزينة والتعاقدات</span>
             </button>
 
             <button
@@ -628,7 +673,7 @@ export default function Dashboard({
 
             <button
               onClick={() => setClinicDrawerOpen(true)}
-              className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors"
+              className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors cursor-pointer"
               title={t('clinicManagement')}
             >
               <Menu size={18} />
@@ -686,22 +731,35 @@ export default function Dashboard({
               onSelectPatient={setSelectedPatientId}
               doctorId={currentDoctorId}
               doctorName={currentDoctorName}
+              staffRole={staffRole}
               onOpenNewPatientModal={() => setShowNewPatient(true)}
               onPatientDeleted={() => setPatientsRefreshKey((k) => k + 1)}
               refreshKey={patientsRefreshKey}
             />
-            <AlertPanel doctorId={currentDoctorId} isDemoSession={isDemoSession} />
+            <AlertPanel doctorId={currentDoctorId} staffRole={staffRole} />
           </div>
         )}
 
-        {activeTab === 'analytics' && (
+        {activeTab === 'analytics' && !isReceptionist && (
           <DoctorAnalyticsPanel
             doctorId={currentDoctorId}
-            isDemoSession={isDemoSession}
+            clinicCode={currentClinicCode}
           />
         )}
 
-        {activeTab === 'reports' && (
+        {activeTab === 'cashbox' && (
+          <ClinicCashboxPanel
+            doctorId={currentDoctorId}
+            clinicName={currentClinicName}
+            clinicCode={currentClinicCode}
+            staffUids={staffUids}
+            staffRole={staffRole}
+            staffName={staffName || currentDoctorName}
+            patients={doctorPatients}
+          />
+        )}
+
+        {activeTab === 'reports' && !isReceptionist && (
           <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
             <div className="flex items-center justify-between pb-4 border-b border-slate-100">
               <div>
@@ -715,10 +773,13 @@ export default function Dashboard({
                 فتح نافذة الطباعة الموسعة
               </button>
             </div>
-            {(isDemoSession || doctorPatients.length > 0) ? (
+            {doctorPatients.length > 0 ? (
               <CardiologyReport
-                patientName={doctorPatients[0]?.name || 'أحمد حسن'}
-                patientId={doctorPatients[0]?.id || '1'}
+                patientName={doctorPatients[0].name}
+                patientId={doctorPatients[0].id}
+                doctorName={currentDoctorName}
+                clinicName={currentClinicName}
+                specialty={currentSpecialty}
               />
             ) : (
               <div className="py-12 text-center space-y-3 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
@@ -792,7 +853,8 @@ export default function Dashboard({
             doctorId={currentDoctorId}
             doctorName={currentDoctorName}
             clinicCode={currentClinicCode}
-            isDemoSession={isDemoSession}
+            staffUids={staffUids}
+            staffRole={staffRole}
           />
         )}
 
@@ -802,9 +864,9 @@ export default function Dashboard({
               <h2 className="text-base font-bold text-slate-900">محاكي هاتف المريض التفاعلي</h2>
               <p className="text-xs text-slate-500">معاينة واجهة المريض عند مسح كارت QR الخاص به</p>
             </div>
-            {(isDemoSession || doctorPatients.length > 0) ? (
+            {doctorPatients.length > 0 ? (
               <div className="max-w-md mx-auto">
-                <PatientMobileDashboard patientId={doctorPatients[0]?.id || '1'} isPortalMode={false} />
+                <PatientMobileDashboard patientId={doctorPatients[0].id} isPortalMode={false} />
               </div>
             ) : (
               <div className="py-12 text-center space-y-3 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
@@ -824,22 +886,36 @@ export default function Dashboard({
         )}
       </main>
 
-      {/* Global AI Assistant */}
-      <GeminiChat isAiBlocked={effectiveAiBlocked} />
+      {/* Global AI Assistant (Doctor only) */}
+      {!isReceptionist && <GeminiChat isAiBlocked={effectiveAiBlocked} />}
 
       {/* Modals */}
       {showNewPatient && (
         <NewPatientModal
           onClose={() => setShowNewPatient(false)}
           doctorId={currentDoctorId}
+          doctorName={currentDoctorName}
           clinicCode={currentClinicCode}
+          staffUids={staffUids}
+          staffRole={staffRole}
           onPatientAdded={() => {
             setPatientsRefreshKey((k) => k + 1);
           }}
         />
       )}
 
-      {showPrescriptionModal && (
+      {showClinicStaffModal && !isReceptionist && (
+        <ClinicStaffModal
+          isOpen={showClinicStaffModal}
+          onClose={() => setShowClinicStaffModal(false)}
+          doctorId={currentDoctorId}
+          doctorName={currentDoctorName}
+          clinicCode={currentClinicCode}
+          onStaffChanged={setStaffUids}
+        />
+      )}
+
+      {showPrescriptionModal && !isReceptionist && (
         <PrescriptionModal
           onClose={() => setShowPrescriptionModal(false)}
           doctorId={currentDoctorId}
@@ -853,7 +929,13 @@ export default function Dashboard({
       )}
 
       {showReportsModal && (
-        <ReportsModal onClose={() => setShowReportsModal(false)} />
+        <ReportsModal
+          onClose={() => setShowReportsModal(false)}
+          doctorId={currentDoctorId}
+          doctorName={currentDoctorName}
+          clinicName={currentClinicName}
+          specialty={currentSpecialty}
+        />
       )}
 
       {showSettingsModal && (
@@ -902,24 +984,50 @@ export default function Dashboard({
               <button
                 onClick={() => {
                   setClinicDrawerOpen(false);
-                  setShowSettingsModal(true);
+                  setActiveTab('cashbox');
                 }}
-                className="w-full p-3 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-2xl text-xs font-bold text-right flex items-center gap-2"
+                className="w-full p-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 rounded-2xl text-xs font-bold text-right flex items-center gap-2 cursor-pointer"
               >
-                <Settings size={16} className="text-amber-600" />
-                <span>الإعدادات</span>
+                <Wallet size={16} className="text-emerald-600" />
+                <span>الخزينة والتعاقدات الطبية</span>
               </button>
 
-              <button
-                onClick={() => {
-                  setClinicDrawerOpen(false);
-                  setActiveTab('analytics');
-                }}
-                className="w-full p-3 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded-2xl text-xs font-bold text-right flex items-center gap-2"
-              >
-                <BarChart3 size={16} className="text-teal-600" />
-                <span>فتح اللوحة الإحصائية وتحليلات العيادة</span>
-              </button>
+              {!isReceptionist && (
+                <>
+                  <button
+                    onClick={() => {
+                      setClinicDrawerOpen(false);
+                      setShowClinicStaffModal(true);
+                    }}
+                    className="w-full p-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 rounded-2xl text-xs font-bold text-right flex items-center gap-2 cursor-pointer"
+                  >
+                    <UserPlus size={16} className="text-indigo-600" />
+                    <span>إدارة طاقم العيادة (السكرتارية والتمريض)</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setClinicDrawerOpen(false);
+                      setShowSettingsModal(true);
+                    }}
+                    className="w-full p-3 bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-2xl text-xs font-bold text-right flex items-center gap-2 cursor-pointer"
+                  >
+                    <Settings size={16} className="text-amber-600" />
+                    <span>الإعدادات</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setClinicDrawerOpen(false);
+                      setActiveTab('analytics');
+                    }}
+                    className="w-full p-3 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded-2xl text-xs font-bold text-right flex items-center gap-2 cursor-pointer"
+                  >
+                    <BarChart3 size={16} className="text-teal-600" />
+                    <span>فتح اللوحة الإحصائية وتحليلات العيادة</span>
+                  </button>
+                </>
+              )}
 
               {onLogout && (
                 <button
@@ -944,10 +1052,10 @@ export default function Dashboard({
           onClose={() => setShowUserProfileModal(false)}
           userId={currentDoctorId}
           userName={currentDoctorName}
-          userEmail={doctorEmail || 'doctor@cardios.eg'}
+          userEmail={doctorEmail || ''}
           userPhone={doctorPhone || ''}
           userRole="Cardiologist"
-          clinicWhatsAppNumber={localStorage.getItem('cardios_custom_doctor_phone') || doctorPhone || '01012345678'}
+          clinicWhatsAppNumber={localStorage.getItem('cardios_custom_doctor_phone') || doctorPhone || ''}
           onSaveSuccess={(updated) => {
             if (updated.name) setCurrentDoctorName(updated.name);
             if (updated.phone) setDoctorPhone(updated.phone);

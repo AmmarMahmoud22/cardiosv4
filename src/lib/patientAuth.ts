@@ -2,17 +2,11 @@ import {doc, getDoc} from 'firebase/firestore';
 import {db} from './firebase';
 
 const CLINIC_SALT = 'cardios_secure_qr_2026_salt';
-export const DOCTOR_PIN = '2026'; // Doctor Security PIN for clinic staff access
 
 /**
  * Generates a reproducible, non-guessable security token for a given patient ID.
  */
-/**
- * Generates a reproducible, non-guessable security token for a given patient ID.
- * Generates consistent token (e.g. cp_wvf314co2y for patient '1').
- */
 export function generatePatientToken(patientId: string, _legacyDob?: string): string {
-  // Use consistent seed matching the card display
   const seed = `${patientId}_c_${CLINIC_SALT}`;
   let hash1 = 5381;
   let hash2 = 0;
@@ -73,21 +67,29 @@ export async function verifyPatientAccess(
 
   const cleanExpectedToken = generatePatientToken(patientId);
 
-  // 1. Check existing active session in sessionStorage
+  // 1. Verify active session only if the patient still exists in Firestore
   try {
     const saved = sessionStorage.getItem(SESSION_STORAGE_KEY);
     if (saved) {
       const session: PatientAuthSession = JSON.parse(saved);
-      // Valid if it matches the requested patient and is less than 48 hours old
       if (session.patientId === patientId && (Date.now() - session.verifiedAt < 48 * 3600 * 1000)) {
-        return {valid: true, patientName: session.patientName, token: session.token, expectedToken: cleanExpectedToken};
+        const pSnap = await getDoc(doc(db, 'patients', patientId));
+        if (pSnap.exists()) {
+          return {
+            valid: true,
+            patientName: pSnap.data().name || session.patientName,
+            token: session.token,
+            expectedToken: cleanExpectedToken
+          };
+        }
+        sessionStorage.removeItem(SESSION_STORAGE_KEY);
       }
     }
   } catch (e) {
-    console.warn('Session parse error:', e);
+    console.warn('Session check error:', e);
   }
 
-  // 2. If no valid session, tokenFromUrl is required
+  // 2. Token is required when no valid active session exists
   if (!tokenFromUrl) {
     return {
       valid: false,
@@ -96,17 +98,12 @@ export async function verifyPatientAccess(
     };
   }
 
-  // 3. Verify against Firestore patient record & deterministic token generator
+  // 3. Strict verification against existing Firestore patient record
   try {
     const pRef = doc(db, 'patients', patientId);
     const snap = await getDoc(pRef);
-    let patientName = `المريض #${patientId}`;
-    let firestoreAccessToken = '';
-    let firestoreSecurityToken = '';
-    let patientDob = '';
 
-    const isSeedPatient = ['1', '2', '3', '4', '5'].includes(patientId);
-    if (!snap.exists() && !isSeedPatient) {
+    if (!snap.exists()) {
       return {
         valid: false,
         expectedToken: cleanExpectedToken,
@@ -114,19 +111,15 @@ export async function verifyPatientAccess(
       };
     }
 
-    if (snap.exists()) {
-      const data = snap.data();
-      patientName = data.name || patientName;
-      firestoreAccessToken = data.accessToken || '';
-      firestoreSecurityToken = data.securityToken || '';
-      patientDob = data.dob || '';
-    }
+    const data = snap.data();
+    const patientName = data.name || `المريض #${patientId}`;
+    const firestoreAccessToken = data.accessToken || '';
+    const firestoreSecurityToken = data.securityToken || '';
+    const patientDob = data.dob || '';
 
-    // Clean user input
     const entered = tokenFromUrl.trim().toLowerCase();
     const enteredWithoutPrefix = entered.replace(/^cp_/, '');
 
-    // List of accepted valid tokens for this patient:
     const validTokens: string[] = [
       cleanExpectedToken.toLowerCase(),
       cleanExpectedToken.replace(/^cp_/, '').toLowerCase(),
@@ -142,10 +135,6 @@ export async function verifyPatientAccess(
       validTokens.push(firestoreSecurityToken.toLowerCase());
       validTokens.push(firestoreSecurityToken.replace(/^cp_/, '').toLowerCase());
     }
-    // Demo bypasses for clinic team
-    validTokens.push(DOCTOR_PIN);
-    validTokens.push('cardios');
-    validTokens.push(`demo_${patientId}`);
 
     const isMatch = validTokens.includes(entered) || validTokens.includes(enteredWithoutPrefix);
 
@@ -157,7 +146,6 @@ export async function verifyPatientAccess(
       };
     }
 
-    // If valid, save session to sessionStorage
     const newSession: PatientAuthSession = {
       patientId,
       token: tokenFromUrl,
@@ -169,12 +157,11 @@ export async function verifyPatientAccess(
     return {valid: true, patientName, token: tokenFromUrl, expectedToken: cleanExpectedToken};
   } catch (err) {
     console.error('Verification error:', err);
-    // Fallback: compare with generated token if network error
-    const entered = tokenFromUrl.trim().toLowerCase();
-    if (entered === cleanExpectedToken.toLowerCase() || entered === cleanExpectedToken.replace(/^cp_/, '').toLowerCase()) {
-      return {valid: true, patientName: `المريض #${patientId}`, token: tokenFromUrl, expectedToken: cleanExpectedToken};
-    }
-    return {valid: false, expectedToken: cleanExpectedToken, reason: 'تعذر التحقق من خادم العيادة حالياً. يرجى المحاولة لاحقاً.'};
+    return {
+      valid: false,
+      expectedToken: cleanExpectedToken,
+      reason: 'تعذر التحقق من خادم العيادة حالياً. يرجى المحاولة لاحقاً.'
+    };
   }
 }
 
@@ -193,8 +180,4 @@ export function setDoctorAuthenticated(auth: boolean) {
   } else {
     sessionStorage.removeItem(DOCTOR_SESSION_KEY);
   }
-}
-
-export function verifyDoctorPin(pin: string): boolean {
-  return pin.trim() === DOCTOR_PIN;
 }

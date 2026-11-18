@@ -1,48 +1,35 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Activity,
   AlertTriangle,
   AlertCircle,
-  CheckCircle2,
-  Info,
   Search,
-  Filter,
-  RefreshCw,
   Download,
-  Trash2,
   Stethoscope,
   FlaskConical,
-  Cpu,
   Clock,
-  Sparkles,
   ChevronDown,
-  ChevronUp,
-  Radio,
-  PlusCircle,
-  ExternalLink,
-  ShieldCheck
+  ChevronUp
 } from 'lucide-react';
-import {
-  AnalyticsEvent,
-  recordSystemActivityEvent,
-  trackClinicApproval,
-  trackLabConnection,
-  trackErrorReport
-} from '../lib/analytics';
+import { AnalyticsEvent } from '../lib/analytics';
 import { useLanguage } from '../context/LanguageContext';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { PaginationControls } from './PaginationControls';
 
 interface SystemActivityLogProps {
   events: AnalyticsEvent[];
   onClearLogs?: () => void;
 }
 
-export default function SystemActivityLog({ events, onClearLogs }: SystemActivityLogProps) {
-  const { language, isRTL, t } = useLanguage();
+export default function SystemActivityLog({ events }: SystemActivityLogProps) {
+  const { language, isRTL } = useLanguage();
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const debouncedSearch = useDebouncedValue(searchQuery, 250);
   const [typeFilter, setTypeFilter] = useState<'all' | 'clinic' | 'lab' | 'error' | 'system'>('all');
   const [severityFilter, setSeverityFilter] = useState<'all' | 'error' | 'warning' | 'success' | 'info'>('all');
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
-  const [isSimulating, setIsSimulating] = useState<boolean>(false);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(15);
 
   // Filtered Events
   const filteredEvents = useMemo(() => {
@@ -63,7 +50,7 @@ export default function SystemActivityLog({ events, onClearLogs }: SystemActivit
       const matchesSeverity = severityFilter === 'all' || ev.severity === severityFilter;
 
       // Text search matching
-      const q = searchQuery.toLowerCase().trim();
+      const q = debouncedSearch.toLowerCase().trim();
       const matchesSearch =
         !q ||
         ev.title.toLowerCase().includes(q) ||
@@ -73,7 +60,16 @@ export default function SystemActivityLog({ events, onClearLogs }: SystemActivit
 
       return matchesType && matchesSeverity && matchesSearch;
     });
-  }, [events, typeFilter, severityFilter, searchQuery]);
+  }, [events, typeFilter, severityFilter, debouncedSearch]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, typeFilter, severityFilter, pageSize]);
+
+  const paginatedEvents = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredEvents.slice(start, start + pageSize);
+  }, [filteredEvents, currentPage, pageSize]);
 
   // Statistics counters
   const totalCount = events.length;
@@ -151,39 +147,6 @@ export default function SystemActivityLog({ events, onClearLogs }: SystemActivit
     };
   };
 
-  // Simulation Triggers (allowing admin to test real-time logging)
-  const handleSimulateEvent = async (type: 'clinic' | 'lab' | 'error') => {
-    setIsSimulating(true);
-    try {
-      if (type === 'clinic') {
-        const randomCodes = ['CLINIC-ALEX-302', 'CLINIC-GIZA-109', 'CLINIC-MANSOURA-404'];
-        const randomNames = ['د/ شريف العادلي', 'د/ مريم النجار', 'د/ يوسف البدري'];
-        const chosen = Math.floor(Math.random() * randomNames.length);
-        await recordSystemActivityEvent({
-          type: 'clinic_signup',
-          title: `تسجيل عيادة جديدة: ${randomNames[chosen]}`,
-          details: `كود: ${randomCodes[chosen]} • استشاري قسطرة وتصوير شرايين القلب • بانتظار الاعتماد`,
-          severity: 'info',
-          source: 'Clinic Portal',
-          metadata: { clinicCode: randomCodes[chosen], autoDetected: true }
-        });
-      } else if (type === 'lab') {
-        const randomLabs = ['معمل ألفا التخصصي', 'مختبر كايرو سكان', 'معمل النيل للتحاليل'];
-        const chosen = Math.floor(Math.random() * randomLabs.length);
-        await trackLabConnection(randomLabs[chosen], 'عيادة د/ حسام فؤاد', 'Troponin I + Lipid Panel (فحص إنزيمات حاد)');
-      } else if (type === 'error') {
-        await trackErrorReport(
-          'تنبيه اختناق كوتة استعلامات الذكاء الاصطناعي (AI Quota 92%)',
-          'عيادة د/ محمد الصاوي تجاوزت 92% من حصة Gemini Flash • تفعيل الترشيد التلقائي للطلبات',
-          'warning',
-          'Gemini Rate Guard'
-        );
-      }
-    } finally {
-      setTimeout(() => setIsSimulating(false), 500);
-    }
-  };
-
   // Export Events to CSV
   const handleExportCSV = () => {
     const headers = ['معرف الحدث', 'النوع', 'العنوان', 'التفاصيل', 'مستوى الأهمية', 'المصدر', 'الجهاز', 'التوقيت'];
@@ -237,39 +200,8 @@ export default function SystemActivityLog({ events, onClearLogs }: SystemActivit
           </div>
         </div>
 
-        {/* Action Buttons: Simulate test events & Export */}
+        {/* Action Buttons: Export */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Quick Simulation Menu */}
-          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/80">
-            <button
-              onClick={() => handleSimulateEvent('clinic')}
-              disabled={isSimulating}
-              className="px-2.5 py-1 bg-white hover:bg-slate-50 text-teal-700 rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
-              title={isRTL ? 'محاكاة تسجيل عيادة جديدة' : 'Simulate Clinic Registration'}
-            >
-              <Stethoscope size={13} />
-              <span className="hidden sm:inline">{isRTL ? '+ عيادة' : '+ Clinic'}</span>
-            </button>
-            <button
-              onClick={() => handleSimulateEvent('lab')}
-              disabled={isSimulating}
-              className="px-2.5 py-1 bg-white hover:bg-slate-50 text-sky-700 rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
-              title={isRTL ? 'محاكاة اتصال معمل تحاليل' : 'Simulate Lab Connection'}
-            >
-              <FlaskConical size={13} />
-              <span className="hidden sm:inline">{isRTL ? '+ معمل' : '+ Lab'}</span>
-            </button>
-            <button
-              onClick={() => handleSimulateEvent('error')}
-              disabled={isSimulating}
-              className="px-2.5 py-1 bg-white hover:bg-slate-50 text-rose-700 rounded-lg text-xs font-bold transition-all shadow-2xs flex items-center gap-1 cursor-pointer disabled:opacity-50"
-              title={isRTL ? 'محاكاة تقرير خطأ/تنبيه' : 'Simulate Error Report'}
-            >
-              <AlertTriangle size={13} />
-              <span className="hidden sm:inline">{isRTL ? '+ خطأ' : '+ Error'}</span>
-            </button>
-          </div>
-
           <button
             onClick={handleExportCSV}
             className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
@@ -398,7 +330,7 @@ export default function SystemActivityLog({ events, onClearLogs }: SystemActivit
             </button>
           </div>
         ) : (
-          filteredEvents.map((event) => {
+          paginatedEvents.map((event) => {
             const badge = getEventBadge(event);
             const Icon = badge.icon;
             const isExpanded = expandedEventId === event.id;
@@ -466,6 +398,17 @@ export default function SystemActivityLog({ events, onClearLogs }: SystemActivit
           })
         )}
       </div>
+
+      <PaginationControls
+        currentPage={currentPage}
+        totalItems={filteredEvents.length}
+        pageSize={pageSize}
+        onPageChange={setCurrentPage}
+        onPageSizeChange={setPageSize}
+        pageSizeOptions={[15, 30, 50]}
+        itemLabelAr="حدث"
+        itemLabelEn="events"
+      />
     </div>
   );
 }

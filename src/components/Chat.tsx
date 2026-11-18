@@ -4,7 +4,15 @@ import {db} from '../lib/firebase';
 import {MessageCircle, Send, User, Stethoscope} from 'lucide-react';
 import {handleFirestoreError, OperationType} from '../lib/firebase-error';
 
-export default function Chat({patientId, patientName}: {patientId: string; patientName?: string}) {
+export default function Chat({
+  patientId,
+  patientName,
+  doctorId = ''
+}: {
+  patientId: string;
+  patientName?: string;
+  doctorId?: string;
+}) {
   const [messages, setMessages] = useState<any[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -37,6 +45,7 @@ export default function Chat({patientId, patientName}: {patientId: string; patie
     try {
       await addDoc(collection(db, 'messages'), {
         patientId,
+        ...(doctorId ? { doctorId } : {}),
         patientName: patientName || 'Patient',
         sender: 'doctor',
         text: text.trim(),

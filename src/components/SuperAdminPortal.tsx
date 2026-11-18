@@ -1,25 +1,32 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   collection,
   doc,
+  getDoc,
   setDoc,
   deleteDoc,
   onSnapshot
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  signOut,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { auth, db, googleProvider, BOOTSTRAP_ADMIN_EMAIL } from '../lib/firebase';
 import { Plan, DoctorWithSubscription, LabWithStats } from '../types/subscription';
-import { SEED_PLANS, SEED_DOCTORS, SEED_LABS } from '../lib/seed';
+import { SEED_PLANS } from '../lib/seed';
 import {
   deleteDoctorEverywhere,
   deleteLabEverywhere,
   getLocalDeletedIds,
-  getLocalSeedFlags,
-  getSeedFlags,
   markSeedFlags,
+  purgeAllDemoData,
+  purgeAllNonPrimaryAccounts,
   reconcileOrphanedSeedsWithSystemUsers,
-  syncStatusToSystemUser,
-  updateLocalPendingDoctorStatus,
-  updateLocalPendingLabStatus
+  syncDoctorScheduleSummary,
+  syncStatusToSystemUser
 } from '../lib/adminSync';
 import {
   ShieldAlert,
@@ -85,6 +92,8 @@ import PlatformRevenueDashboard from './PlatformRevenueDashboard';
 import SystemActivityLog from './SystemActivityLog';
 import UserManagement from './UserManagement';
 import AIKnowledgeBaseManager from './AIKnowledgeBaseManager';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { PaginationControls } from './PaginationControls';
 
 interface SuperAdminPortalProps {
   onBack: () => void;
@@ -93,12 +102,14 @@ interface SuperAdminPortalProps {
 export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   const { language, direction, isRTL, t } = useLanguage();
 
-  // Authentication & Security Gate
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return sessionStorage.getItem('cardios_superadmin_auth') === 'true';
-  });
-  const [adminPin, setAdminPin] = useState<string>('');
-  const [pinError, setPinError] = useState<string>('');
+  // Authentication & Security Gate (Real Firebase Auth + admins/{uid})
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authChecking, setAuthChecking] = useState<boolean>(true);
+  const [adminUser, setAdminUser] = useState<FirebaseUser | null>(null);
+  const [adminEmail, setAdminEmail] = useState<string>('');
+  const [adminPassword, setAdminPassword] = useState<string>('');
+  const [authLoading, setAuthLoading] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string>('');
 
   // Navigation Tabs: overview, revenue, activity, users, finance, doctors, plans, ai, labs
   const [activeTab, setActiveTab] = useState<'overview' | 'revenue' | 'activity' | 'users' | 'finance' | 'doctors' | 'plans' | 'ai' | 'labs'>('overview');
@@ -113,7 +124,14 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   const [labs, setLabs] = useState<LabWithStats[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const debouncedSearch = useDebouncedValue(searchQuery, 250);
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'suspended' | 'pending' | 'expiring'>('all');
+  const [doctorsPage, setDoctorsPage] = useState<number>(1);
+  const [doctorsPageSize, setDoctorsPageSize] = useState<number>(10);
+  const [labsSearchQuery, setLabsSearchQuery] = useState<string>('');
+  const debouncedLabsSearch = useDebouncedValue(labsSearchQuery, 250);
+  const [labsPage, setLabsPage] = useState<number>(1);
+  const [labsPageSize, setLabsPageSize] = useState<number>(10);
 
   // Emergency Global AI Switch
   const [globalAiEnabled, setGlobalAiEnabled] = useState<boolean>(() => {
@@ -192,27 +210,139 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   // Success Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [confirmResetQuotas, setConfirmResetQuotas] = useState<boolean>(false);
+  const [confirmPurgeOthers, setConfirmPurgeOthers] = useState<boolean>(false);
+  const [purgingOthers, setPurgingOthers] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // PIN / Password verification for Admin Portal
-  const handleVerifyPin = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (adminPin.trim() === '207812') {
-      setIsAuthenticated(true);
-      sessionStorage.setItem('cardios_superadmin_auth', 'true');
-      setPinError('');
-    } else {
-      setPinError('كلمة السر غير صحيحة. يرجى التأكد من كتابة كلمة السر الخاصة بك.');
+  // Real Firebase Auth Listener verifying admins/{uid} or verified bootstrap admin email
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem('cardios_superadmin_auth');
+    } catch {
+      // ignore
+    }
+
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setAdminUser(null);
+        setIsAuthenticated(false);
+        setAuthChecking(false);
+        return;
+      }
+
+      setAuthChecking(true);
+      try {
+        const isPrimarySuperAdmin =
+          Boolean(user.email) &&
+          user.email!.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase() &&
+          user.emailVerified;
+
+        if (isPrimarySuperAdmin) {
+          const nowIso = new Date().toISOString();
+          await setDoc(
+            doc(db, 'admins', user.uid),
+            {
+              uid: user.uid,
+              email: BOOTSTRAP_ADMIN_EMAIL,
+              name: user.displayName || 'المشرف العام للنظام',
+              role: 'superadmin',
+              active: true,
+              createdAt: nowIso,
+              updatedAt: nowIso
+            },
+            { merge: true }
+          ).catch(() => {});
+          setAdminUser(user);
+          setIsAuthenticated(true);
+          setAuthError('');
+          await purgeAllDemoData().catch(() => {});
+          await purgeAllNonPrimaryAccounts(user.uid, false).catch(() => {});
+          setAuthChecking(false);
+          return;
+        }
+
+        // Strict primary-only SuperAdmin: reject any non-primary account
+        setAdminUser(user);
+        setIsAuthenticated(false);
+        setAuthError(
+          isRTL
+            ? `غير مصرح! الحساب الوحيد المصرح له كمشرف عام (Super Admin) هو (${BOOTSTRAP_ADMIN_EMAIL}).`
+            : `Unauthorized! Only the primary verified SuperAdmin (${BOOTSTRAP_ADMIN_EMAIL}) is permitted.`
+        );
+      } catch (err) {
+        console.warn('Admin auth verification error:', err);
+        setIsAuthenticated(false);
+        setAuthError(
+          isRTL
+            ? 'تعذر التحقق من صلاحية المشرف العام على السحابة.'
+            : 'Unable to verify SuperAdmin authorization.'
+        );
+      } finally {
+        setAuthChecking(false);
+      }
+    });
+
+    return () => unsub();
+  }, [isRTL]);
+
+  const handleGoogleAdminLogin = async () => {
+    setAuthError('');
+    setAuthLoading(true);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
+        setAuthError(
+          isRTL
+            ? 'تعذر إتمام تسجيل الدخول عبر Google. يرجى المحاولة مرة أخرى.'
+            : 'Unable to complete Google sign-in.'
+        );
+      }
+    } finally {
+      setAuthLoading(false);
     }
   };
 
-  const handleAdminLogout = () => {
+  const handleEmailAdminLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    if (!adminEmail.trim() || !adminPassword) {
+      setAuthError(isRTL ? 'يرجى إدخال البريد الإلكتروني وكلمة المرور.' : 'Email and password are required.');
+      return;
+    }
+    setAuthLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, adminEmail.trim(), adminPassword);
+    } catch (err: any) {
+      const code = err?.code || '';
+      if (code === 'auth/operation-not-allowed') {
+        setAuthError(
+          isRTL
+            ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعل في مشروع Firebase حالياً؛ يرجى الدخول بحساب Google المعتمد.'
+            : 'Email/password sign-in is disabled; please sign in using the authorized Google account.'
+        );
+      } else {
+        setAuthError(
+          isRTL
+            ? 'بيانات الدخول غير صحيحة أو الحساب لا يملك صلاحية المشرف العام.'
+            : 'Invalid credentials or missing SuperAdmin privileges.'
+        );
+      }
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleAdminLogout = async () => {
+    await signOut(auth).catch(() => {});
     setIsAuthenticated(false);
-    sessionStorage.removeItem('cardios_superadmin_auth');
+    setAdminUser(null);
+    setAdminPassword('');
   };
 
   // Live Firestore Sync & Fallback
@@ -264,59 +394,16 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
             aiQuotaLimit: data.aiQuotaLimit || 200,
             isAiBlocked: !!data.isAiBlocked,
             maxPatientsLimit: data.maxPatientsLimit || 50,
-            phone: data.phone || '01000000000',
-            email: data.email || 'doctor@cardios.eg',
-            patientCount: data.patientCount || 3,
-            medicalLicenseNumber: data.medicalLicenseNumber || (data.id === 'doc-1' ? 'EGY-MED-49102' : data.id === 'doc-2' ? 'EGY-MED-38291' : 'EGY-MED-55019'),
+            phone: data.phone || '',
+            email: data.email || '',
+            patientCount: data.patientCount || 0,
+            medicalLicenseNumber: data.medicalLicenseNumber || 'قيد التوثيق',
             verificationStatus: data.verificationStatus || (data.status === 'active' ? 'verified' : data.status === 'pending' ? 'pending' : 'unverified'),
-            prescriptionsIssued: data.prescriptionsIssued || (data.id === 'doc-1' ? 42 : data.id === 'doc-2' ? 18 : 0),
-            echoReportsCount: data.echoReportsCount || (data.id === 'doc-1' ? 19 : data.id === 'doc-2' ? 7 : 0),
-            lastActiveAt: data.lastActiveAt || 'اليوم، 11:30 ص'
+            prescriptionsIssued: data.prescriptionsIssued || 0,
+            echoReportsCount: data.echoReportsCount || 0,
+            lastActiveAt: data.lastActiveAt || '—'
           });
         });
-      } else {
-        const flags = await getSeedFlags();
-        flags.deletedIds.forEach((id) => deletedSet.add(id));
-        if (!flags.doctorsSeeded) {
-          const enrichedSeed = SEED_DOCTORS.filter((d) => !deletedSet.has(d.id)).map(d => ({
-            ...d,
-            medicalLicenseNumber: d.id === 'doc-1' ? 'EGY-MED-49102' : d.id === 'doc-2' ? 'EGY-MED-38291' : 'EGY-MED-55019',
-            verificationStatus: d.status === 'active' ? ('verified' as const) : ('pending' as const),
-            prescriptionsIssued: d.id === 'doc-1' ? 42 : d.id === 'doc-2' ? 18 : 0,
-            echoReportsCount: d.id === 'doc-1' ? 19 : d.id === 'doc-2' ? 7 : 0,
-            patientCount: d.id === 'doc-1' ? 3 : d.id === 'doc-2' ? 2 : 0,
-            lastActiveAt: 'اليوم، 11:30 ص'
-          }));
-          loadedDocs = [...enrichedSeed as any];
-          await markSeedFlags({ doctorsSeeded: true });
-          enrichedSeed.forEach(d => {
-            setDoc(doc(db, 'doctors', d.id), d, { merge: true }).catch(console.warn);
-          });
-        }
-      }
-
-      try {
-        const rawLocal = localStorage.getItem('cardios_local_pending_doctors');
-        if (rawLocal) {
-          const localList: DoctorWithSubscription[] = JSON.parse(rawLocal);
-          for (const item of localList) {
-            if (deletedSet.has(item.id)) continue;
-            const idx = loadedDocs.findIndex(d => d.id === item.id || d.clinicCode === item.clinicCode);
-            if (idx === -1) {
-              loadedDocs.unshift({
-                ...item,
-                medicalLicenseNumber: item.medicalLicenseNumber || 'EGY-MED-PENDING',
-                verificationStatus: item.verificationStatus || 'pending',
-                prescriptionsIssued: 0,
-                echoReportsCount: 0,
-                patientCount: 0,
-                lastActiveAt: 'مسجل حديثاً'
-              });
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Error reading local pending docs:', e);
       }
 
       if (!cancelled) {
@@ -325,19 +412,13 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
       }
     }, (err) => {
       console.warn('Error reading doctors:', err);
-      const localFlags = getLocalSeedFlags();
-      if (localFlags.doctorsSeeded) {
-        setDoctors([]);
-      } else {
-        const delSet = new Set(getLocalDeletedIds());
-        setDoctors((SEED_DOCTORS as any).filter((d: any) => !delSet.has(d.id)));
-      }
+      setDoctors([]);
       setLoading(false);
     });
 
     const unsubLabs = onSnapshot(collection(db, 'labs'), async (snap) => {
       const deletedSet = new Set(getLocalDeletedIds());
-      let loadedLabs: LabWithStats[] = [];
+      const loadedLabs: LabWithStats[] = [];
       if (!snap.empty) {
         snap.forEach((docSnap) => {
           if (deletedSet.has(docSnap.id)) return;
@@ -347,41 +428,15 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
             name: data.name,
             labCode: data.labCode,
             technicianName: data.technicianName,
-            phone: data.phone,
+            phone: data.phone || '',
             branch: data.branch,
             accreditation: data.accreditation,
             linkedClinics: data.linkedClinics || [],
             status: data.status || 'active',
-            email: data.email,
-            testsProcessed: data.testsProcessed || 12
+            email: data.email || '',
+            testsProcessed: data.testsProcessed || 0
           });
         });
-      } else {
-        const flags = await getSeedFlags();
-        flags.deletedIds.forEach((id) => deletedSet.add(id));
-        if (!flags.labsSeeded) {
-          loadedLabs = [...SEED_LABS.filter((l) => !deletedSet.has(l.id)) as any];
-          await markSeedFlags({ labsSeeded: true });
-          loadedLabs.forEach(l => {
-            setDoc(doc(db, 'labs', l.id), l, { merge: true }).catch(console.warn);
-          });
-        }
-      }
-
-      try {
-        const rawLocalLabs = localStorage.getItem('cardios_local_pending_labs');
-        if (rawLocalLabs) {
-          const localList: LabWithStats[] = JSON.parse(rawLocalLabs);
-          for (const item of localList) {
-            if (deletedSet.has(item.id)) continue;
-            const idx = loadedLabs.findIndex(l => l.id === item.id || l.labCode === item.labCode);
-            if (idx === -1) {
-              loadedLabs.unshift(item);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Error reading local pending labs:', e);
       }
 
       if (!cancelled) {
@@ -389,13 +444,7 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
       }
     }, (err) => {
       console.warn('Error reading labs:', err);
-      const localFlags = getLocalSeedFlags();
-      if (localFlags.labsSeeded) {
-        setLabs([]);
-      } else {
-        const delSet = new Set(getLocalDeletedIds());
-        setLabs((SEED_LABS as any).filter((l: any) => !delSet.has(l.id)));
-      }
+      setLabs([]);
     });
 
     const unsubAnalytics = subscribeToAnalytics((data) => {
@@ -462,12 +511,19 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   // Approve Doctor License
   const handleVerifyLicense = async (doctor: DoctorWithSubscription) => {
     try {
-      updateLocalPendingDoctorStatus(doctor.id, 'active', doctor.email);
       await setDoc(doc(db, 'doctors', doctor.id), {
         verificationStatus: 'verified',
         status: 'active'
       }, { merge: true });
       await setDoc(doc(db, 'users', doctor.id), { status: 'active' }, { merge: true }).catch(() => {});
+      await syncDoctorScheduleSummary({
+        doctorId: doctor.id,
+        doctorName: doctor.name,
+        clinicName: doctor.clinicName,
+        clinicCode: doctor.clinicCode,
+        specialty: doctor.specialty,
+        status: 'active'
+      });
       await syncStatusToSystemUser({
         id: doctor.id,
         name: doctor.name,
@@ -489,9 +545,16 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   const handleToggleDoctorStatus = async (doctor: DoctorWithSubscription) => {
     const newStatus = doctor.status === 'active' ? 'suspended' : 'active';
     try {
-      updateLocalPendingDoctorStatus(doctor.id, newStatus, doctor.email);
       await setDoc(doc(db, 'doctors', doctor.id), { status: newStatus }, { merge: true });
       await setDoc(doc(db, 'users', doctor.id), { status: newStatus }, { merge: true }).catch(() => {});
+      await syncDoctorScheduleSummary({
+        doctorId: doctor.id,
+        doctorName: doctor.name,
+        clinicName: doctor.clinicName,
+        clinicCode: doctor.clinicCode,
+        specialty: doctor.specialty,
+        status: newStatus
+      });
       await syncStatusToSystemUser({
         id: doctor.id,
         name: doctor.name,
@@ -535,7 +598,6 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
   const handleToggleLabStatus = async (lab: LabWithStats) => {
     const newStatus = lab.status === 'active' ? 'suspended' : 'active';
     try {
-      updateLocalPendingLabStatus(lab.id, newStatus, lab.email);
       await setDoc(doc(db, 'labs', lab.id), { status: newStatus }, { merge: true });
       await setDoc(doc(db, 'users', lab.id), { status: newStatus }, { merge: true }).catch(() => {});
       await syncStatusToSystemUser({
@@ -615,9 +677,16 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
         status: doctorNewStatus
       };
 
-      updateLocalPendingDoctorStatus(selectedDoctor.id, doctorNewStatus, selectedDoctor.email);
       await setDoc(doc(db, 'doctors', selectedDoctor.id), updatedFields, { merge: true });
       await setDoc(doc(db, 'users', selectedDoctor.id), { status: doctorNewStatus }, { merge: true }).catch(() => {});
+      await syncDoctorScheduleSummary({
+        doctorId: selectedDoctor.id,
+        doctorName: selectedDoctor.name,
+        clinicName: selectedDoctor.clinicName,
+        clinicCode: selectedDoctor.clinicCode,
+        specialty: selectedDoctor.specialty,
+        status: doctorNewStatus
+      });
       await syncStatusToSystemUser({
         id: selectedDoctor.id,
         name: selectedDoctor.name,
@@ -661,8 +730,8 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
       aiQuotaLimit: Number(newDocForm.aiQuotaLimit),
       maxPatientsLimit: Number(newDocForm.maxPatientsLimit),
       isAiBlocked: false,
-      phone: newDocForm.phone || '01000000000',
-      email: newDocForm.email || `${cCode.toLowerCase()}@cardios.eg`,
+      phone: newDocForm.phone || '',
+      email: newDocForm.email || '',
       medicalLicenseNumber: newDocForm.medicalLicenseNumber || `EGY-MED-${Date.now().toString().slice(-5)}`,
       verificationStatus: 'verified',
       patientCount: 0,
@@ -672,13 +741,22 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
     };
 
     try {
-      await setDoc(doc(db, 'doctors', newDocId), newDoctorObj, { merge: true });
+      await setDoc(doc(db, 'doctors', newDocId), { ...newDoctorObj, staffUids: [] }, { merge: true });
+      await syncDoctorScheduleSummary({
+        doctorId: newDocId,
+        doctorName: newDoctorObj.name,
+        clinicName: newDoctorObj.clinicName,
+        clinicCode: newDoctorObj.clinicCode,
+        specialty: newDoctorObj.specialty,
+        status: 'active'
+      });
       await setDoc(doc(db, 'system_users', newDocId), {
         id: newDocId,
         name: newDoctorObj.name,
         email: newDoctorObj.email || `${cCode.toLowerCase()}@cardios.eg`,
         role: 'Cardiologist',
         status: 'Active',
+        clinicCode: newDoctorObj.clinicCode,
         lastLogin: new Date().toLocaleDateString('en-US'),
         licenseNumber: newDoctorObj.medicalLicenseNumber
       }, { merge: true });
@@ -734,34 +812,68 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
     return expDate <= thirtyDaysAhead;
   });
 
-  const filteredDoctors = doctors
-    .filter((docItem) => {
-      const matchesSearch =
-        docItem.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        docItem.clinicCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (docItem.specialty && docItem.specialty.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (docItem.medicalLicenseNumber && docItem.medicalLicenseNumber.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredDoctors = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    return doctors
+      .filter((docItem) => {
+        const matchesSearch =
+          !q ||
+          docItem.name.toLowerCase().includes(q) ||
+          docItem.clinicCode.toLowerCase().includes(q) ||
+          (docItem.specialty && docItem.specialty.toLowerCase().includes(q)) ||
+          (docItem.medicalLicenseNumber && docItem.medicalLicenseNumber.toLowerCase().includes(q));
 
-      const matchesStatus =
-        statusFilter === 'all' ||
-        (statusFilter === 'active' && docItem.status === 'active') ||
-        (statusFilter === 'suspended' && docItem.status === 'suspended') ||
-        (statusFilter === 'pending' && docItem.status === 'pending') ||
-        (statusFilter === 'expiring' && expiringDoctors.some(ed => ed.id === docItem.id));
+        const matchesStatus =
+          statusFilter === 'all' ||
+          (statusFilter === 'active' && docItem.status === 'active') ||
+          (statusFilter === 'suspended' && docItem.status === 'suspended') ||
+          (statusFilter === 'pending' && docItem.status === 'pending') ||
+          (statusFilter === 'expiring' && expiringDoctors.some(ed => ed.id === docItem.id));
 
-      return matchesSearch && matchesStatus;
-    })
-    .sort((a, b) => (a.status === 'pending' ? -1 : 1));
+        return matchesSearch && matchesStatus;
+      })
+      .sort((a, b) => (a.status === 'pending' ? -1 : 1));
+  }, [doctors, debouncedSearch, statusFilter, expiringDoctors]);
 
-  // ================= SECURITY LOGIN GATE =================
+  useEffect(() => {
+    setDoctorsPage(1);
+  }, [debouncedSearch, statusFilter, doctorsPageSize]);
+
+  const paginatedDoctors = useMemo(() => {
+    const start = (doctorsPage - 1) * doctorsPageSize;
+    return filteredDoctors.slice(start, start + doctorsPageSize);
+  }, [filteredDoctors, doctorsPage, doctorsPageSize]);
+
+  const filteredLabs = useMemo(() => {
+    const q = debouncedLabsSearch.trim().toLowerCase();
+    return labs.filter((lab) => {
+      if (!q) return true;
+      return (
+        lab.name.toLowerCase().includes(q) ||
+        (lab.labCode && lab.labCode.toLowerCase().includes(q)) ||
+        (lab.technicianName && lab.technicianName.toLowerCase().includes(q)) ||
+        (lab.branch && lab.branch.toLowerCase().includes(q))
+      );
+    });
+  }, [labs, debouncedLabsSearch]);
+
+  useEffect(() => {
+    setLabsPage(1);
+  }, [debouncedLabsSearch, labsPageSize]);
+
+  const paginatedLabs = useMemo(() => {
+    const start = (labsPage - 1) * labsPageSize;
+    return filteredLabs.slice(start, start + labsPageSize);
+  }, [filteredLabs, labsPage, labsPageSize]);
+
+  // ================= SECURITY LOGIN GATE (REAL FIREBASE AUTH) =================
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-900 flex items-center justify-center p-4 font-sans relative overflow-hidden" dir={direction}>
-        {/* Ambient decorative lighting */}
         <div className="absolute -top-32 -right-32 w-96 h-96 bg-teal-200/40 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-32 -left-32 w-96 h-96 bg-sky-200/40 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="w-full max-w-md bg-white/85 backdrop-blur-2xl border border-white/90 rounded-3xl p-8 shadow-[0_20px_60px_rgba(15,23,42,0.08)] relative overflow-hidden z-10">
+        <div className="w-full max-w-md bg-white/90 backdrop-blur-2xl border border-white/90 rounded-3xl p-8 shadow-[0_20px_60px_rgba(15,23,42,0.08)] relative overflow-hidden z-10">
           <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-teal-500 via-cyan-500 to-indigo-500" />
 
           <div className="flex justify-end mb-2">
@@ -773,43 +885,118 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
               <ShieldAlert size={32} />
             </div>
             <h1 className="text-xl font-black text-slate-900">{t('adminTitle')}</h1>
-            <p className="text-xs text-slate-500 mt-1">{t('adminSub')}</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {isRTL
+                ? 'دخول محمي عبر مصادقة Firebase المعتمدة وصلاحيات المشرف العام (admins)'
+                : 'Protected via Firebase Authentication & Verified Admin Privileges'}
+            </p>
           </div>
 
-          <form onSubmit={handleVerifyPin} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-2">
-                {isRTL ? 'كلمة السر الخاصة بمدير النظام:' : 'Admin Password:'}
-              </label>
-              <div className="relative">
-                <input
-                  type="password"
-                  value={adminPin}
-                  onChange={(e) => setAdminPin(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-xs text-center font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-600 focus:ring-2 focus:ring-teal-500/10 shadow-xs font-bold"
-                />
-                <KeyRound size={16} className={`absolute ${isRTL ? 'left-3' : 'right-3'} top-1/2 -translate-y-1/2 text-slate-400`} />
-              </div>
-              {pinError && <p className="text-xs text-rose-600 font-bold mt-1.5">{pinError}</p>}
+          {authChecking ? (
+            <div className="py-10 text-center space-y-3">
+              <RefreshCw size={24} className="animate-spin text-teal-600 mx-auto" />
+              <p className="text-xs text-slate-500 font-bold">
+                {isRTL ? 'جاري التحقق من جلسة المشرف العام...' : 'Verifying SuperAdmin session...'}
+              </p>
             </div>
+          ) : (
+            <div className="space-y-4">
+              {authError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-semibold leading-relaxed">
+                  {authError}
+                </div>
+              )}
 
-            <button
-              type="submit"
-              className="w-full py-3 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl transition-all shadow-sm shadow-teal-600/20 flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Lock size={15} />
-              <span>{isRTL ? 'دخول لوحة الإدارة' : 'Access Admin Command Center'}</span>
-            </button>
+              {adminUser && (
+                <div className="p-3 bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-between gap-2 text-xs">
+                  <div className="truncate">
+                    <span className="text-slate-500 block text-[10px]">الحساب المسجل حالياً:</span>
+                    <span className="font-mono font-bold text-slate-800">{adminUser.email || adminUser.uid}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAdminLogout}
+                    className="px-2.5 py-1 bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 rounded-lg font-bold shrink-0 cursor-pointer"
+                  >
+                    {isRTL ? 'تبديل الحساب' : 'Switch Account'}
+                  </button>
+                </div>
+              )}
 
-            <button
-              type="button"
-              onClick={onBack}
-              className="w-full text-center text-xs text-slate-500 hover:text-slate-800 transition-colors pt-2 block font-medium"
-            >
-              {isRTL ? '← العودة للصفحة الرئيسية' : '← Return to Main Page'}
-            </button>
-          </form>
+              <button
+                type="button"
+                onClick={handleGoogleAdminLogin}
+                disabled={authLoading}
+                className="w-full py-3 px-4 bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                </svg>
+                <span>{isRTL ? 'دخول المشرف العام بحساب Google' : 'Sign in with Google (SuperAdmin)'}</span>
+              </button>
+
+              <div className="relative flex py-1 items-center">
+                <div className="flex-grow border-t border-slate-200" />
+                <span className="shrink mx-3 text-[10px] font-bold text-slate-400">
+                  {isRTL ? 'أو بالبريد وكلمة المرور' : 'Or with Email & Password'}
+                </span>
+                <div className="flex-grow border-t border-slate-200" />
+              </div>
+
+              <form onSubmit={handleEmailAdminLogin} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {isRTL ? 'البريد الإلكتروني للإدارة:' : 'Admin Email:'}
+                  </label>
+                  <input
+                    type="email"
+                    value={adminEmail}
+                    onChange={(e) => setAdminEmail(e.target.value)}
+                    placeholder={BOOTSTRAP_ADMIN_EMAIL}
+                    dir="ltr"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {isRTL ? 'كلمة المرور:' : 'Password:'}
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="password"
+                      value={adminPassword}
+                      onChange={(e) => setAdminPassword(e.target.value)}
+                      placeholder="••••••••"
+                      dir="ltr"
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-600"
+                    />
+                    <KeyRound size={15} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full py-3 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white font-bold text-xs rounded-xl transition-all shadow-sm shadow-teal-600/20 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Lock size={15} />
+                  <span>{isRTL ? 'دخول لوحة الإدارة' : 'Access Admin Command Center'}</span>
+                </button>
+              </form>
+
+              <button
+                type="button"
+                onClick={onBack}
+                className="w-full text-center text-xs text-slate-500 hover:text-slate-800 transition-colors pt-2 block font-medium cursor-pointer"
+              >
+                {isRTL ? '← العودة للصفحة الرئيسية' : '← Return to Main Page'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -987,6 +1174,44 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
               <Zap size={14} />
               <span>{globalAiEnabled ? t('emergencyAiStop') : t('resumeAi')}</span>
             </button>
+
+            <button
+              type="button"
+              disabled={purgingOthers}
+              onClick={async () => {
+                if (!confirmPurgeOthers) {
+                  setConfirmPurgeOthers(true);
+                  setTimeout(() => setConfirmPurgeOthers(false), 5000);
+                  return;
+                }
+                setPurgingOthers(true);
+                try {
+                  const res = await purgeAllNonPrimaryAccounts(adminUser?.uid, true);
+                  showToast(
+                    isRTL
+                      ? `تم حذف جميع الحسابات الأخرى (${res.deletedCount}) والإبقاء على المشرف الأساسي (${BOOTSTRAP_ADMIN_EMAIL}) فقط.`
+                      : `Purged ${res.deletedCount} other accounts; only ${BOOTSTRAP_ADMIN_EMAIL} remains.`
+                  );
+                } finally {
+                  setConfirmPurgeOthers(false);
+                  setPurgingOthers(false);
+                }
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border cursor-pointer ${
+                confirmPurgeOthers
+                  ? 'bg-rose-600 text-white border-rose-700'
+                  : 'bg-white hover:bg-rose-50 text-rose-700 border-rose-200'
+              }`}
+            >
+              <Trash2 size={13} />
+              <span>
+                {purgingOthers
+                  ? (isRTL ? 'جاري المسح...' : 'Purging...')
+                  : confirmPurgeOthers
+                    ? (isRTL ? 'تأكيد مسح كل الحسابات الأخرى؟' : 'Confirm Purge All?')
+                    : (isRTL ? 'مسح كافة الحسابات الأخرى' : 'Purge Other Accounts')}
+              </span>
+            </button>
           </div>
         </div>
 
@@ -1128,8 +1353,8 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                     <span className="text-sm font-black text-slate-900 font-mono">{analyticsMetrics.totalVisits}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-600">تجارب البوابة التجريبية:</span>
-                    <span className="text-sm font-black text-teal-700 font-mono">{analyticsMetrics.demoTrialsTotal}</span>
+                    <span className="text-xs text-slate-600">العيادات المسجلة بالمنصة:</span>
+                    <span className="text-sm font-black text-teal-700 font-mono">{doctors.length}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-slate-600">معامل التحاليل المعتمدة:</span>
@@ -1336,7 +1561,7 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
 
             {/* Doctors Grid / Table (Frosted Glass Cards) */}
             <div className="space-y-3">
-              {filteredDoctors.map((docItem) => {
+              {paginatedDoctors.map((docItem) => {
                 const isVerified = docItem.verificationStatus === 'verified';
                 const aiPct = docItem.aiQuotaLimit > 0 ? Math.min(100, Math.round((docItem.aiQueriesUsed / docItem.aiQuotaLimit) * 100)) : 0;
 
@@ -1398,13 +1623,13 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                         {/* Activity Metrics Strip */}
                         <div className="flex flex-wrap items-center gap-3 pt-1 text-[11px] text-slate-600 font-mono">
                           <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200 text-slate-700">
-                            👥 {docItem.patientCount ?? 3} مرضى
+                            👥 {docItem.patientCount ?? 0} مرضى
                           </span>
                           <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200 text-slate-700">
-                            💊 {docItem.prescriptionsIssued ?? 14} روشتة
+                            💊 {docItem.prescriptionsIssued ?? 0} روشتة
                           </span>
                           <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200 text-slate-700">
-                            🫀 {docItem.echoReportsCount ?? 8} إيكو
+                            🫀 {docItem.echoReportsCount ?? 0} إيكو
                           </span>
                           <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200 text-slate-700">
                             🤖 AI: {docItem.aiQueriesUsed || 0}/{docItem.aiQuotaLimit || 200} ({aiPct}%)
@@ -1490,6 +1715,16 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                 </div>
               )}
             </div>
+
+            <PaginationControls
+              currentPage={doctorsPage}
+              totalItems={filteredDoctors.length}
+              pageSize={doctorsPageSize}
+              onPageChange={setDoctorsPage}
+              onPageSizeChange={setDoctorsPageSize}
+              itemLabelAr="عيادة"
+              itemLabelEn="clinics"
+            />
           </div>
         )}
 
@@ -1644,15 +1879,25 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
         {/* ================= TAB 6: LABS TAB ================= */}
         {activeTab === 'labs' && (
           <div className="bg-white/80 backdrop-blur-xl border border-white/80 rounded-3xl p-5 space-y-4 shadow-[0_8px_30px_rgba(15,23,42,0.04)]">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
               <div>
                 <h2 className="text-base font-black text-slate-900">إدارة شبكة معامل التحاليل الطبية الشريكة</h2>
                 <p className="text-xs text-slate-500">قبول واعتماد المعامل ورصد عدد الفحوصات المرفوعة للعيادات</p>
               </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={labsSearchQuery}
+                  onChange={(e) => setLabsSearchQuery(e.target.value)}
+                  placeholder="بحث باسم المعمل، الكود، أو الفني..."
+                  className="bg-white border border-slate-300 text-xs rounded-xl px-3.5 py-2 pr-8 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-teal-500 shadow-xs w-56"
+                />
+                <Search size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              </div>
             </div>
 
             <div className="space-y-2.5">
-              {labs.map((lab) => (
+              {paginatedLabs.map((lab) => (
                 <div key={lab.id} className="bg-white/90 border border-slate-200/80 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
                   <div>
                     <div className="flex items-center gap-2">
@@ -1691,14 +1936,24 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                 </div>
               ))}
 
-              {labs.length === 0 && (
+              {filteredLabs.length === 0 && (
                 <div className="py-12 text-center bg-slate-50/70 rounded-2xl border border-dashed border-slate-200 text-slate-500">
                   <FlaskConical className="w-9 h-9 mx-auto mb-2 text-slate-300" />
-                  <p className="text-sm font-bold text-slate-700">لا توجد معامل تحاليل مسجلة حالياً</p>
+                  <p className="text-sm font-bold text-slate-700">لا توجد معامل تحاليل مطابقة للبحث</p>
                   <p className="text-xs text-slate-400 mt-1">يمكنك إضافة معمل جديد من تبويب إدارة المستخدمين</p>
                 </div>
               )}
             </div>
+
+            <PaginationControls
+              currentPage={labsPage}
+              totalItems={filteredLabs.length}
+              pageSize={labsPageSize}
+              onPageChange={setLabsPage}
+              onPageSizeChange={setLabsPageSize}
+              itemLabelAr="معمل"
+              itemLabelEn="labs"
+            />
           </div>
         )}
       </main>
@@ -1795,7 +2050,6 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                   <option value="active">نشط ومفعل (Active)</option>
                   <option value="pending">بانتظار التدقيق والاعتماد (Pending)</option>
                   <option value="suspended">مجمّد (Suspended)</option>
-                  <option value="trial">فترة تجريبية (Trial)</option>
                   <option value="expired">منتهي الصلاحية (Expired)</option>
                 </select>
               </div>

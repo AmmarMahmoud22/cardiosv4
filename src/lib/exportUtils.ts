@@ -67,9 +67,9 @@ export function exportDoctorsToCSV(doctors: DoctorWithSubscription[], plans: Pla
       `"${planPrice}"`,
       `"${doc.subscriptionExpiresAt || '2026-12-31'}"`,
       `"${statusArabic}"`,
-      doc.patientCount ?? 3,
-      doc.prescriptionsIssued ?? 14,
-      doc.echoReportsCount ?? 8,
+      doc.patientCount ?? 0,
+      doc.prescriptionsIssued ?? 0,
+      doc.echoReportsCount ?? 0,
       doc.aiQueriesUsed || 0,
       doc.aiQuotaLimit || 200,
       `"${aiStatus}"`,
@@ -150,11 +150,6 @@ export function openAdminPrintableReport(data: {
   arr: number;
   language?: 'ar' | 'en';
 }) {
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) {
-    console.warn(data.language === 'en' ? 'Popup blocked while opening admin report' : 'يرجى السماح بالنوافذ المنبثقة لفتح تقرير الإدارة');
-    return;
-  }
 
   const isEn = data.language === 'en';
   const currentDate = new Date().toLocaleDateString(isEn ? 'en-US' : 'ar-EG', {
@@ -415,7 +410,28 @@ export function openAdminPrintableReport(data: {
     </html>
   `;
 
-  printWindow.document.open();
-  printWindow.document.write(html);
-  printWindow.document.close();
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  document.body.appendChild(iframe);
+
+  const iframeDoc = iframe.contentWindow?.document;
+  if (iframeDoc) {
+    iframeDoc.open();
+    iframeDoc.write(html);
+    iframeDoc.close();
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      }, 1500);
+    }, 250);
+  } else if (iframe.parentNode) {
+    iframe.parentNode.removeChild(iframe);
+  }
 }

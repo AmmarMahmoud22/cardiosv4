@@ -1,28 +1,41 @@
 import React, {useState, useEffect} from 'react';
 import {collection, query, where, onSnapshot, updateDoc, doc} from 'firebase/firestore';
-import {db} from '../lib/firebase';
+import {onAuthStateChanged} from 'firebase/auth';
+import {db, auth} from '../lib/firebase';
+import {StaffRole} from '../types/clinic';
 import {AlertCircle, CheckCircle, ShieldCheck} from 'lucide-react';
 
 export default function AlertPanel({
-  doctorId = 'doc-1',
-  isDemoSession = true
+  doctorId = '',
+  staffRole = 'doctor'
 }: {
   doctorId?: string;
-  isDemoSession?: boolean;
+  staffRole?: StaffRole;
 }) {
+  const [authUid, setAuthUid] = useState<string>(() => auth.currentUser?.uid || '');
   const [alerts, setAlerts] = useState<any[]>([]);
 
   useEffect(() => {
-    const q = query(collection(db, 'vitals'), where('systolic', '>', 140));
+    const unsub = onAuthStateChanged(auth, (u) => setAuthUid(u?.uid || ''));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!doctorId || !authUid) {
+      setAlerts([]);
+      return;
+    }
+    const isRec = staffRole === 'receptionist';
+    const q = isRec
+      ? query(collection(db, 'vitals'), where('staffUids', 'array-contains', authUid))
+      : query(collection(db, 'vitals'), where('doctorId', '==', doctorId));
     return onSnapshot(q, (snapshot) => {
-      const allAlerts = snapshot.docs.map(d => ({id: d.id, ...d.data()}));
-      if (!isDemoSession && doctorId) {
-        setAlerts(allAlerts.filter((a: any) => a.doctorId === doctorId));
-      } else {
-        setAlerts(allAlerts);
-      }
+      const allAlerts = snapshot.docs
+        .map(d => ({id: d.id, ...d.data()}))
+        .filter((a: any) => Number(a.systolic) > 140 && a.doctorId === doctorId);
+      setAlerts(allAlerts);
     });
-  }, [doctorId, isDemoSession]);
+  }, [doctorId, staffRole, authUid]);
 
   const acknowledgeAlert = async (id: string) => {
     await updateDoc(doc(db, 'vitals', id), {status: 'acknowledged'});

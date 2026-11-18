@@ -8,6 +8,9 @@ import ClinicalCalculatorsModal from './ClinicalCalculatorsModal';
 interface Props {
   patientName: string;
   patientId?: string;
+  doctorName?: string;
+  clinicName?: string;
+  specialty?: string;
 }
 
 interface EchoData {
@@ -54,7 +57,13 @@ const DEFAULT_NORMAL: EchoData = {
   recommendations: 'Continue lifestyle modifications and cardiovascular risk factors control. Routine follow-up after 1 year.'
 };
 
-export default function CardiologyReport({patientName, patientId}: Props) {
+export default function CardiologyReport({
+  patientName,
+  patientId,
+  doctorName = 'الطبيب المعالج',
+  clinicName = 'عيادة أمراض القلب والأوعية الدموية',
+  specialty = 'استشاري أمراض القلب والقسطرة'
+}: Props) {
   const [data, setData] = useState<EchoData>(DEFAULT_NORMAL);
   const [activeTab, setActiveTab] = useState<'echo' | 'valves' | 'ecg' | 'conclusion'>('echo');
   const [saving, setSaving] = useState(false);
@@ -132,7 +141,7 @@ export default function CardiologyReport({patientName, patientId}: Props) {
     }
   };
 
-  const handleWhatsAppShare = () => {
+  const whatsappShareUrl = (() => {
     const text = `*تقرير فحص القلب (Cardios Cardiovascular Center)*
 👤 *المريض:* ${patientName}
 📅 *التاريخ:* ${new Date().toLocaleDateString('ar-EG')}
@@ -152,10 +161,10 @@ ${data.conclusion}
 💊 *التوصيات الطبية والمتابعة:*
 ${data.recommendations}
 
-👨‍⚕️ *د. القلب والأوعية الدموية - منصة Cardios*`;
+👨‍⚕️ *${doctorName} - ${clinicName}*`;
 
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-  };
+    return `https://wa.me/?text=${encodeURIComponent(text)}`;
+  })();
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mt-6">
@@ -186,13 +195,15 @@ ${data.recommendations}
               <span>{saveSuccess ? 'Saved!' : saving ? 'Saving...' : 'Save to EHR'}</span>
             </button>
 
-            <button
-              onClick={handleWhatsAppShare}
+            <a
+              href={whatsappShareUrl}
+              target="_blank"
+              rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-all active:scale-95"
             >
               <Share2 size={15} />
               <span>Share via WhatsApp</span>
-            </button>
+            </a>
 
             <button
               onClick={() => setShowPrintModal(true)}
@@ -528,9 +539,9 @@ ${data.recommendations}
         <div className="border-b-2 border-blue-900 pb-4 mb-6">
           <div className="flex justify-between items-start">
             <div className="flex items-center gap-3">
-              <img src="/assets/aistudio/image_54a63720.png" alt="د/ عمار محمود" className="h-14 w-auto object-contain" />
+              <img src="/assets/aistudio/image_54a63720.png" alt={doctorName} className="h-14 w-auto object-contain" />
               <div>
-                <h1 className="text-xl font-black tracking-tight text-blue-900">عيادة د/ عمار محمود لأمراض القلب والقسطرة</h1>
+                <h1 className="text-xl font-black tracking-tight text-blue-900">{clinicName}</h1>
                 <p className="text-xs font-bold text-gray-700 uppercase tracking-widest mt-0.5">
                   Specialized Cardiology, Echocardiography & Interventional Angiography
                 </p>
@@ -706,15 +717,15 @@ ${data.recommendations}
         {/* Official Signature Footer */}
         <div className="pt-6 border-t border-gray-300 flex justify-between items-end text-xs text-gray-600 print-footer">
           <div>
-            <p className="font-bold text-gray-800">عيادة د/ عمار محمود لأمراض القلب والقسطرة</p>
+            <p className="font-bold text-gray-800">{clinicName}</p>
             <p className="text-[11px] text-gray-500">Certified Digital Medical Record • Egypt</p>
           </div>
           <div className="text-right">
             <p className="text-xs text-gray-400 mb-6">Physician Signature & Stamp:</p>
             <div className="w-52 border-b-2 border-gray-800 pb-1 text-center font-bold text-gray-900">
-              د/ عمار محمود
+              {doctorName}
             </div>
-            <p className="text-[10px] text-gray-500 mt-1">استشاري أمراض القلب والقسطرة</p>
+            <p className="text-[10px] text-gray-500 mt-1">{specialty}</p>
           </div>
         </div>
       </div>
@@ -728,10 +739,9 @@ ${data.recommendations}
             patientName,
             patientId,
             date: new Date().toLocaleDateString('ar-EG'),
-            doctorName: 'أ.د. عمار محمود',
-            doctorSpecialty: 'استشاري أمراض القلب والأوعية الدموية والقسطرة التداخلية',
-            clinicName: 'مركز CARDIOS التخصصي لأمراض القلب',
-            licenseNumber: 'ترخيص نقابة الأطباء رقم: 104825 / ج.م.ع'
+            doctorName,
+            doctorSpecialty: specialty,
+            clinicName
           }}
           onClose={() => setShowPrintModal(false)}
         />

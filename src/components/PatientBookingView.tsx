@@ -21,8 +21,10 @@ import {
   where,
   getDocs,
   addDoc,
+  setDoc,
   doc,
-  getDoc
+  getDoc,
+  increment
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { DoctorScheduleSettings, DoctorWorkingDay, WaitlistEntry } from '../types/appointment';
@@ -31,7 +33,7 @@ import { format, addDays } from 'date-fns';
 import { ar } from 'date-fns/locale';
 
 export default function PatientBookingView({
-  clinicCode: urlClinicCode = 'CLINIC-AMMAR-101',
+  clinicCode: urlClinicCode = '',
   onBackToMain
 }: {
   clinicCode?: string;
@@ -39,6 +41,7 @@ export default function PatientBookingView({
 }) {
   const [clinicCode] = useState<string>(urlClinicCode);
   const [schedule, setSchedule] = useState<DoctorScheduleSettings | null>(null);
+  const [clinicNotFound, setClinicNotFound] = useState<boolean>(false);
   const [availableDays, setAvailableDays] = useState<Array<{
     dateStr: string;
     dayNameAr: string;
@@ -69,55 +72,59 @@ export default function PatientBookingView({
   useEffect(() => {
     const loadScheduleAndSlots = async () => {
       setLoadingDays(true);
+      setClinicNotFound(false);
+      if (!clinicCode.trim()) {
+        setClinicNotFound(true);
+        setLoadingDays(false);
+        return;
+      }
+
       try {
-        // Resolve the clinic's doctor dynamically using clinicCode
-        let resolvedDocId = 'doc-1';
-        let matchedDocData: any = null;
-        try {
-          const docsSnap = await getDocs(collection(db, 'doctors'));
-          const matched = docsSnap.docs.find(
-            (d) => d.data().clinicCode?.toUpperCase() === clinicCode.toUpperCase()
-          );
-          if (matched) {
-            resolvedDocId = matched.id;
-            matchedDocData = matched.data();
-          }
-        } catch (err) {
-          console.warn('Notice looking up clinic by code:', err);
+        const cleanCode = clinicCode.trim();
+        const upperCode = cleanCode.toUpperCase();
+        let schedSnapDocs = (await getDocs(
+          query(collection(db, 'doctor_schedules'), where('clinicCodeUpper', '==', upperCode))
+        )).docs;
+
+        if (schedSnapDocs.length === 0) {
+          schedSnapDocs = (await getDocs(
+            query(collection(db, 'doctor_schedules'), where('clinicCode', '==', cleanCode))
+          )).docs;
         }
 
-        const schedSnap = await getDoc(doc(db, 'doctor_schedules', resolvedDocId));
-
-        let currentSchedule: DoctorScheduleSettings;
-        if (schedSnap.exists()) {
-          currentSchedule = schedSnap.data() as DoctorScheduleSettings;
-        } else {
-          currentSchedule = {
-            doctorId: resolvedDocId,
-            doctorName: matchedDocData?.name || 'د/ عمار محمود',
-            clinicName: matchedDocData?.clinicName || 'عيادة أمراض القلب والقسطرة',
-            specialty: matchedDocData?.specialty || 'استشاري أمراض القلب والقسطرة التداخلية',
-            clinicCode,
-            workingDays: [
-              { dayOfWeek: 6, dayNameAr: 'السبت', enabled: true, maxCapacity: 10, startTime: '16:00', endTime: '21:00' },
-              { dayOfWeek: 0, dayNameAr: 'الأحد', enabled: true, maxCapacity: 10, startTime: '16:00', endTime: '21:00' },
-              { dayOfWeek: 2, dayNameAr: 'الثلاثاء', enabled: true, maxCapacity: 10, startTime: '16:00', endTime: '21:00' },
-              { dayOfWeek: 4, dayNameAr: 'الخميس', enabled: true, maxCapacity: 12, startTime: '16:00', endTime: '22:00' }
-            ],
-            instructions: 'يرجى التواجد قبل الموعد بـ 15 دقيقة وإحضار التحاليل والأشعة السابقة.'
-          };
+        const matchedSched = schedSnapDocs.find((d) => d.data().status !== 'suspended');
+        if (!matchedSched) {
+          setClinicNotFound(true);
+          setLoadingDays(false);
+          return;
         }
+
+        const resolvedDocId = matchedSched.id;
+        const schedData = matchedSched.data() as DoctorScheduleSettings & { staffUids?: string[] };
+        const currentSchedule: DoctorScheduleSettings = {
+          ...schedData,
+          doctorId: schedData.doctorId || resolvedDocId,
+          clinicCode: schedData.clinicCode || cleanCode,
+          workingDays: Array.isArray(schedData.workingDays) && schedData.workingDays.length > 0
+            ? schedData.workingDays
+            : [
+                { dayOfWeek: 6, dayNameAr: 'السبت', enabled: true, maxCapacity: 10, startTime: '16:00', endTime: '21:00' },
+                { dayOfWeek: 0, dayNameAr: 'الأحد', enabled: true, maxCapacity: 10, startTime: '16:00', endTime: '21:00' },
+                { dayOfWeek: 2, dayNameAr: 'الثلاثاء', enabled: true, maxCapacity: 10, startTime: '16:00', endTime: '21:00' },
+                { dayOfWeek: 4, dayNameAr: 'الخميس', enabled: true, maxCapacity: 12, startTime: '16:00', endTime: '22:00' }
+              ],
+          instructions: schedData.instructions || 'يرجى التواجد قبل الموعد بـ 15 دقيقة وإحضار التحاليل والأشعة السابقة.'
+        };
         setSchedule(currentSchedule);
 
-        const appointmentsRef = collection(db, 'appointments');
-        const appSnap = await getDocs(appointmentsRef);
-        const allAppointments = appSnap.docs
-          .map(d => d.data())
-          .filter((a: any) =>
-            (a.doctorId && a.doctorId === resolvedDocId) ||
-            (a.clinicCode && a.clinicCode.toUpperCase() === clinicCode.toUpperCase()) ||
-            (!a.doctorId && !a.clinicCode && resolvedDocId === 'doc-1')
-          );
+        // Read ONLY non-PII slot_counts summary subcollection (never query patient appointments publicly)
+        const slotCountsSnap = await getDocs(collection(db, 'doctor_schedules', resolvedDocId, 'slot_counts'));
+        const bookedCountByDate: Record<string, number> = {};
+        slotCountsSnap.forEach((sDoc) => {
+          const data = sDoc.data();
+          const dateKey = data.date || sDoc.id;
+          bookedCountByDate[dateKey] = Math.max(0, Number(data.count) || 0);
+        });
 
         const daysList = [];
         const today = new Date();
@@ -129,11 +136,7 @@ export default function PatientBookingView({
 
           if (matchingConfig) {
             const dateStr = format(checkDate, 'yyyy-MM-dd');
-            const bookedCount = allAppointments.filter(
-              (a: any) =>
-                a.status !== 'Cancelled' &&
-                (a.date === dateStr || (a.startTime && a.startTime.startsWith(dateStr)))
-            ).length;
+            const bookedCount = bookedCountByDate[dateStr] || 0;
             const maxCap = matchingConfig.maxCapacity || 10;
             const remaining = Math.max(0, maxCap - bookedCount);
             const isFull = remaining === 0;
@@ -205,7 +208,12 @@ export default function PatientBookingView({
 
     try {
       const selectedDayObj = availableDays.find(d => d.dateStr === selectedDateStr);
-      const targetDoctorId = schedule?.doctorId || 'doc-1';
+      const targetDoctorId = schedule?.doctorId || '';
+      if (!targetDoctorId) {
+        setBookingError('تعذر تحديد العيادة المطلوبة للحجز.');
+        setSubmitting(false);
+        return;
+      }
 
       if (isWaitlistMode || selectedDayObj?.isFull) {
         const waitlistRef = collection(db, 'waitlists');
@@ -229,18 +237,18 @@ export default function PatientBookingView({
         return;
       }
 
-      const appointmentsRef = collection(db, 'appointments');
-      const q = query(appointmentsRef, where('date', '==', selectedDateStr));
-      const existingSnap = await getDocs(q);
-      const clinicDayBookings = existingSnap.docs.filter((d) => {
-        const data = d.data();
-        return data.doctorId === targetDoctorId || data.clinicCode === clinicCode;
-      });
-      const queueNumber = clinicDayBookings.length + 1;
+      const slotCountRef = doc(db, 'doctor_schedules', targetDoctorId, 'slot_counts', selectedDateStr);
+      const slotSnap = await getDoc(slotCountRef);
+      const existingCount = slotSnap.exists() ? Math.max(0, Number(slotSnap.data().count) || 0) : 0;
+      const queueNumber = existingCount + 1;
+      const clinicStaffUids: string[] = Array.isArray((schedule as any)?.staffUids)
+        ? (schedule as any).staffUids.slice(0, 10)
+        : [];
 
       const newAppointment = {
         doctorId: targetDoctorId,
         clinicCode,
+        staffUids: clinicStaffUids,
         patientName: patientName.trim(),
         patientPhone: patientPhone.trim(),
         patientAge: patientAge.trim(),
@@ -252,7 +260,17 @@ export default function PatientBookingView({
         createdAt: new Date().toISOString()
       };
 
-      const docRef = await addDoc(appointmentsRef, newAppointment);
+      const docRef = await addDoc(collection(db, 'appointments'), newAppointment);
+      await setDoc(
+        slotCountRef,
+        {
+          date: selectedDateStr,
+          doctorId: targetDoctorId,
+          count: increment(1),
+          updatedAt: new Date().toISOString()
+        },
+        { merge: true }
+      ).catch(() => {});
 
       const receipt: ReceiptData = {
         appointmentId: docRef.id,
@@ -261,7 +279,7 @@ export default function PatientBookingView({
         patientPhone: patientPhone.trim(),
         patientAge: patientAge.trim(),
         dateStr: selectedDateStr,
-        doctorName: schedule?.doctorName || 'د/ عمار محمود',
+        doctorName: schedule?.doctorName || 'الطبيب المعالج',
         clinicName: schedule?.clinicName || 'عيادة أمراض القلب والقسطرة',
         clinicCode,
         clinicLogoUrl: schedule?.clinicLogoUrl,
@@ -279,6 +297,30 @@ export default function PatientBookingView({
       setSubmitting(false);
     }
   };
+
+  if (clinicNotFound) {
+    return (
+      <div className="min-h-screen bg-slate-100 font-sans p-4 flex items-center justify-center text-slate-800" dir="rtl">
+        <div className="w-full max-w-md bg-white border border-slate-200 rounded-3xl shadow-xl p-8 text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto border border-rose-200">
+            <AlertTriangle size={32} />
+          </div>
+          <h2 className="text-lg font-black text-slate-900">العيادة غير موجودة أو غير مفعلة</h2>
+          <p className="text-xs text-slate-500 leading-relaxed">
+            تأكد من مسح رمز QR الصحيح الصادر من العيادة أو التحقق من كود العيادة ({clinicCode || 'غير محدد'}).
+          </p>
+          {onBackToMain && (
+            <button
+              onClick={onBackToMain}
+              className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition-all"
+            >
+              العودة للصفحة الرئيسية
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans p-3 sm:p-6 flex flex-col items-center justify-center text-slate-800" dir="rtl">
@@ -300,7 +342,7 @@ export default function PatientBookingView({
           </div>
 
           <h1 className="text-xl sm:text-2xl font-black">{schedule?.clinicName || 'عيادة أمراض القلب والقسطرة'}</h1>
-          <p className="text-xs sm:text-sm font-bold text-teal-100">{schedule?.doctorName || 'د/ عمار محمود'}</p>
+          <p className="text-xs sm:text-sm font-bold text-teal-100">{schedule?.doctorName || 'الطبيب المعالج'}</p>
           <div className="inline-block bg-white/15 backdrop-blur-xs px-3 py-1 rounded-full text-[11px] font-mono font-bold mt-1">
             كود العيادة: {clinicCode}
           </div>
@@ -440,7 +482,7 @@ export default function PatientBookingView({
                             required
                             value={patientPhone}
                             onChange={(e) => setPatientPhone(e.target.value)}
-                            placeholder="01012345678"
+                            placeholder="010XXXXXXXX"
                             className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-teal-600 rounded-xl px-4 py-2.5 text-xs text-slate-900 font-mono"
                           />
                         </div>

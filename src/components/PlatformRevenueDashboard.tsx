@@ -55,7 +55,7 @@ export default function PlatformRevenueDashboard({ doctors, plans }: PlatformRev
 
   // Active doctors count
   const activeDoctors = doctors.filter(d => d.status === 'active');
-  const activeCount = Math.max(1, activeDoctors.length);
+  const activeCount = activeDoctors.length;
 
   // Current Base Monthly Subscriptions from active doctors
   const currentMonthlySubscriptions = activeDoctors.reduce((acc, curr) => {
@@ -63,7 +63,13 @@ export default function PlatformRevenueDashboard({ doctors, plans }: PlatformRev
     return acc + (p?.price || 500);
   }, 0);
 
-  // Generate dynamic rolling monthly historical and projected data
+  // Total real consultations/transactions recorded across clinics
+  const realTotalTransactions = activeDoctors.reduce(
+    (acc, curr) => acc + (curr.prescriptionsIssued || 0) + (curr.echoReportsCount || 0),
+    0
+  );
+
+  // Generate dynamic rolling monthly data anchored strictly to real active clinics
   const revenueHistory: MonthlyRevenueRecord[] = useMemo(() => {
     const monthsAr = [
       'مايو 2025', 'يونيو 2025', 'يوليو 2025', 'أغسطس 2025', 'سبتمبر 2025', 'أكتوبر 2025',
@@ -74,22 +80,30 @@ export default function PlatformRevenueDashboard({ doctors, plans }: PlatformRev
       'Nov 2025', 'Dec 2025', 'Jan 2026', 'Feb 2026', 'Mar 2026', 'Apr 2026'
     ];
 
-    // Scaling factors based on current real platform size
-    const baseSub = Math.max(1200, currentMonthlySubscriptions);
-    const growthRamp = [0.35, 0.42, 0.50, 0.58, 0.65, 0.72, 0.78, 0.85, 0.90, 0.94, 0.98, 1.0];
+    if (activeCount === 0) {
+      const zeroRecords: MonthlyRevenueRecord[] = monthsAr.map((mAr, idx) => ({
+        month: mAr,
+        monthEn: monthsEn[idx],
+        subscriptions: 0,
+        transactionFees: 0,
+        totalRevenue: 0,
+        consultationCount: 0,
+        activeClinics: 0,
+        cloudCosts: 0,
+        netMargin: 0
+      }));
+      return timeframe === '6m' ? zeroRecords.slice(-6) : zeroRecords;
+    }
 
+    const feePerTx = 25;
     const records: MonthlyRevenueRecord[] = monthsAr.map((mAr, idx) => {
-      const factor = growthRamp[idx];
-      const subs = Math.round(baseSub * factor);
-      // Linked clinics generate transaction fees from remote cardiology consultations, RPM telemetry checks, and e-prescriptions
-      // Average 35-45% of subscription value in transaction fees
-      const consults = Math.round(18 * factor * activeCount);
-      const feePerTx = 25; // 25 EGP platform take per telehealth / telemetry transaction
+      const isCurrent = idx === monthsAr.length - 1;
+      const subs = isCurrent ? currentMonthlySubscriptions : 0;
+      const consults = isCurrent ? realTotalTransactions : 0;
       const txFees = Math.round(consults * feePerTx);
       const totalRev = subs + txFees;
-      const cloud = Math.round(totalRev * 0.05); // ~5% infra & Gemini cost
+      const cloud = Math.round(totalRev * 0.05);
       const net = totalRev - cloud;
-      const clinics = Math.max(1, Math.round(activeCount * factor));
 
       return {
         month: mAr,
@@ -98,31 +112,35 @@ export default function PlatformRevenueDashboard({ doctors, plans }: PlatformRev
         transactionFees: txFees,
         totalRevenue: totalRev,
         consultationCount: consults,
-        activeClinics: clinics,
+        activeClinics: isCurrent ? activeCount : 0,
         cloudCosts: cloud,
         netMargin: net
       };
     });
 
     return timeframe === '6m' ? records.slice(-6) : records;
-  }, [currentMonthlySubscriptions, activeCount, timeframe]);
+  }, [currentMonthlySubscriptions, activeCount, realTotalTransactions, timeframe]);
 
   // Current Latest Month KPI
   const latestMonth = revenueHistory[revenueHistory.length - 1] || {
-    subscriptions: currentMonthlySubscriptions,
-    transactionFees: Math.round(currentMonthlySubscriptions * 0.4),
-    totalRevenue: Math.round(currentMonthlySubscriptions * 1.4),
-    consultationCount: activeCount * 18,
-    activeClinics: activeCount,
-    cloudCosts: Math.round(currentMonthlySubscriptions * 0.05),
-    netMargin: Math.round(currentMonthlySubscriptions * 1.35)
+    subscriptions: 0,
+    transactionFees: 0,
+    totalRevenue: 0,
+    consultationCount: 0,
+    activeClinics: 0,
+    cloudCosts: 0,
+    netMargin: 0
   };
+  const prevMonth = revenueHistory.length >= 2 ? revenueHistory[revenueHistory.length - 2] : null;
+  const revenueGrowthPct =
+    prevMonth && prevMonth.totalRevenue > 0
+      ? Math.round(((latestMonth.totalRevenue - prevMonth.totalRevenue) / prevMonth.totalRevenue) * 100)
+      : 0;
 
   // Total Period Aggregates
   const totalPeriodRevenue = revenueHistory.reduce((acc, curr) => acc + curr.totalRevenue, 0);
   const totalPeriodSubscriptions = revenueHistory.reduce((acc, curr) => acc + curr.subscriptions, 0);
   const totalPeriodFees = revenueHistory.reduce((acc, curr) => acc + curr.transactionFees, 0);
-  const totalPeriodConsults = revenueHistory.reduce((acc, curr) => acc + curr.consultationCount, 0);
   const feeContributionPct = totalPeriodRevenue > 0 ? Math.round((totalPeriodFees / totalPeriodRevenue) * 100) : 0;
 
   // Pie chart revenue breakdown
@@ -130,33 +148,28 @@ export default function PlatformRevenueDashboard({ doctors, plans }: PlatformRev
     {
       name: isRTL ? 'اشتراكات العيادات (SaaS Subscriptions)' : 'SaaS Subscriptions',
       value: totalPeriodSubscriptions,
-      color: '#0d9488' // Teal 600
+      color: '#0d9488'
     },
     {
       name: isRTL ? 'رسوم العمليات والكشوفات (Transaction Fees)' : 'Clinic Transaction Fees',
       value: totalPeriodFees,
-      color: '#0284c7' // Sky 600
-    },
-    {
-      name: isRTL ? 'عمولات تحويل المعامل (Lab Diagnostic Fees)' : 'Lab Diagnostic Referral Fees',
-      value: Math.round(totalPeriodFees * 0.25),
-      color: '#6366f1' // Indigo 500
+      color: '#0284c7'
     }
   ];
 
-  // Clinic breakdown of transaction volume
+  // Clinic breakdown of actual transaction volume
   const topClinicsBreakdown = useMemo(() => {
-    return doctors.slice(0, 5).map((doc, idx) => {
-      const txCount = 14 + (idx * 9) + (doc.prescriptionsIssued || 0);
+    return activeDoctors.slice(0, 5).map((docItem) => {
+      const txCount = (docItem.prescriptionsIssued || 0) + (docItem.echoReportsCount || 0);
       const estFees = txCount * 25;
       return {
-        name: doc.name.replace('د/', '').trim(),
-        clinic: doc.clinicName,
+        name: docItem.name.replace('د/', '').trim(),
+        clinic: docItem.clinicName,
         transactions: txCount,
         fees: estFees
       };
     });
-  }, [doctors]);
+  }, [activeDoctors]);
 
   // Custom Glassmorphism Tooltip
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -314,7 +327,9 @@ export default function PlatformRevenueDashboard({ doctors, plans }: PlatformRev
           </div>
           <div className="flex items-center gap-1 text-[11px] text-emerald-700 font-bold">
             <ArrowUpRight size={14} />
-            <span>+18.4% {isRTL ? 'نمو مقارنة بالشهر السابق' : 'vs last month'}</span>
+            <span>
+              {revenueGrowthPct > 0 ? `+${revenueGrowthPct}%` : `${revenueGrowthPct}%`} {isRTL ? 'مقارنة بالشهر السابق' : 'vs last month'}
+            </span>
           </div>
         </div>
 
@@ -521,19 +536,27 @@ export default function PlatformRevenueDashboard({ doctors, plans }: PlatformRev
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white font-mono">
-                  {topClinicsBreakdown.map((clinic, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/70">
-                      <td className="py-2.5 px-3 font-sans font-bold text-slate-900">د/ {clinic.name}</td>
-                      <td className="py-2.5 px-3 font-sans text-slate-600">{clinic.clinic}</td>
-                      <td className="py-2.5 px-3 font-bold text-sky-700">{clinic.transactions} كشف</td>
-                      <td className="py-2.5 px-3 font-bold text-emerald-700">{clinic.fees.toLocaleString()} EGP</td>
-                      <td className="py-2.5 px-3 text-center">
-                        <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-sans font-bold">
-                          نشط ومتصل
-                        </span>
+                  {topClinicsBreakdown.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-slate-400 font-sans">
+                        {isRTL ? 'لا توجد عيادات نشطة مسجلة حالياً' : 'No active clinics registered yet'}
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    topClinicsBreakdown.map((clinic, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/70">
+                        <td className="py-2.5 px-3 font-sans font-bold text-slate-900">د/ {clinic.name}</td>
+                        <td className="py-2.5 px-3 font-sans text-slate-600">{clinic.clinic}</td>
+                        <td className="py-2.5 px-3 font-bold text-sky-700">{clinic.transactions} كشف</td>
+                        <td className="py-2.5 px-3 font-bold text-emerald-700">{clinic.fees.toLocaleString()} EGP</td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-sans font-bold">
+                            نشط ومتصل
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

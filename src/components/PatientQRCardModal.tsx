@@ -7,10 +7,23 @@ import {generatePatientToken} from '../lib/patientAuth';
 interface Props {
   patientName: string;
   patientId: string;
+  doctorName?: string;
+  clinicName?: string;
+  clinicPhone?: string;
   onClose: () => void;
 }
 
-export default function PatientQRCardModal({patientName, patientId, onClose}: Props) {
+export default function PatientQRCardModal({
+  patientName,
+  patientId,
+  doctorName = '',
+  clinicName = '',
+  clinicPhone = '',
+  onClose
+}: Props) {
+  const resolvedDoctorName = doctorName || 'الطبيب المعالج';
+  const resolvedClinicName = clinicName || 'عيادة أمراض القلب والأوعية الدموية';
+
   // Generate secure token and portal access URL
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://cardios-clinic.app';
   const patientToken = generatePatientToken(patientId);
@@ -27,8 +40,7 @@ export default function PatientQRCardModal({patientName, patientId, onClose}: Pr
     }
   }, [patientId, patientToken]);
 
-  const handleShareWhatsApp = () => {
-    const text = `*كارت المتابعة الذكية - عيادة د/ عمار محمود* 🫀
+  const whatsappText = `*كارت المتابعة الذكية - ${resolvedClinicName}* 🫀
 عزيزي المريض: *${patientName}*
 رقم الملف: #${patientId}
 رمز التحقق الأمني: ${patientToken}
@@ -40,14 +52,12 @@ ${portalUrl}
 *من خلال الرابط يمكنك:*
 ✅ تسجيل قياسات الضغط والنبض يومياً لتصل لطبيبك لحظياً.
 ✅ متابعة مواعيد أخذ الأدوية والجرعات اليومية.
-✅ تحميل أحدث روشتة ونتائج معمل الأزهري للتحاليل.
-✅ مراسلة د/ عمار محمود مباشرة عبر البوابة.
+✅ تحميل أحدث روشتة ونتائج التحاليل الطبية المعتمدة.
+✅ مراسلة طبيبك المعالج مباشرة عبر البوابة.
+${clinicPhone ? `\n📞 *هاتف العيادة:* ${clinicPhone}` : ''}
+👨‍⚕️ ${resolvedDoctorName} - Cardios`;
 
-📞 *هاتف العيادة المباشر:* 01146963589
-👨‍⚕️ عيادة د/ عمار محمود - استشاري أمراض القلب والقسطرة`;
-
-    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
-  };
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(whatsappText)}`;
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -60,7 +70,7 @@ ${portalUrl}
             </div>
             <div>
               <h3 className="font-bold text-sm">Patient Smart QR Access Card</h3>
-              <p className="text-[11px] text-blue-200/80">كارت الوصول الذكي - عيادة د/ عمار محمود</p>
+              <p className="text-[11px] text-blue-200/80">كارت الوصول الذكي - {resolvedClinicName}</p>
             </div>
           </div>
           <button
@@ -78,12 +88,12 @@ ${portalUrl}
 
             {/* Clinic Info */}
             <div className="mb-4">
-              <img src="/assets/aistudio/image_54a63720.png" alt="د/ عمار محمود" className="h-14 w-auto object-contain mx-auto mb-2" />
+              <img src="/assets/aistudio/image_54a63720.png" alt={resolvedClinicName} className="h-14 w-auto object-contain mx-auto mb-2" />
               <span className="text-[10px] font-bold text-blue-900 tracking-widest uppercase bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
-                Dr. Ammar Mahmoud Clinic
+                Cardios Clinical Care
               </span>
-              <h2 className="text-lg font-black text-gray-900 mt-1">عيادة د/ عمار محمود</h2>
-              <p className="text-[11px] text-gray-500">استشاري أمراض القلب والأوعية الدموية والقسطرة</p>
+              <h2 className="text-lg font-black text-gray-900 mt-1">{resolvedClinicName}</h2>
+              <p className="text-[11px] text-gray-500">{resolvedDoctorName}</p>
             </div>
 
             {/* Patient Name badge */}
@@ -126,20 +136,22 @@ ${portalUrl}
             </div>
 
             <p className="text-[10px] text-gray-400 mt-2">
-              🔒 اتصال مشفر وآمن مع خوادم عيادة د. القلب
+              🔒 اتصال مشفر وآمن مع {resolvedClinicName}
             </p>
           </div>
         </div>
 
         {/* Modal Actions Footer */}
         <div className="p-4 bg-white border-t border-gray-200 flex items-center justify-end gap-2 no-print">
-          <button
-            onClick={handleShareWhatsApp}
+          <a
+            href={whatsappUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-all active:scale-95"
           >
             <Share2 size={15} />
             <span>Send to Patient (WhatsApp)</span>
-          </button>
+          </a>
           <button
             onClick={() => window.print()}
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all active:scale-95"

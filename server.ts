@@ -12,15 +12,28 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json({ limit: '5mb' }));
 
-const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
-const ai = new GoogleGenAI({
-  apiKey: apiKey,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+function getApiKey(): string | undefined {
+  return process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+}
+
+let cachedAiClient: GoogleGenAI | null = null;
+let cachedKey: string | undefined;
+
+function getAiClient(): GoogleGenAI {
+  const key = getApiKey();
+  if (!cachedAiClient || cachedKey !== key) {
+    cachedKey = key;
+    cachedAiClient = new GoogleGenAI({
+      apiKey: key,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  }
+  return cachedAiClient;
+}
 
 // Helper for generating clinical cardiology fallback responses (used only when strictKnowledgeOnly is OFF)
 function generateCardiologyFallback(message: string, patientContext?: any): string {
@@ -68,11 +81,11 @@ app.post('/api/consult-ai', async (req, res) => {
   const prompt = `Patient: ${patientName}. Vitals: ${JSON.stringify(vitals)}. Provide cardiology clinical advice regarding hypertension management based on these vitals.`;
 
   try {
-    if (!apiKey) {
+    if (!getApiKey()) {
       throw new Error('No API key provided');
     }
     const response = (await Promise.race([
-      ai.models.generateContent({
+      getAiClient().models.generateContent({
         model: 'gemini-4-hydrogen',
         contents: prompt,
         config: {
@@ -100,7 +113,7 @@ app.post('/api/ai/embed', async (req, res) => {
     return res.status(400).json({ error: 'texts array is required' });
   }
 
-  if (!apiKey) {
+  if (!getApiKey()) {
     return res.status(503).json({ error: 'GEMINI_API_KEY is not configured on server' });
   }
 
@@ -108,7 +121,7 @@ app.post('/api/ai/embed', async (req, res) => {
     const cleanTexts = texts.slice(0, 32).map((t) => String(t || '').slice(0, 6000));
     const responses = await Promise.all(
       cleanTexts.map((text) =>
-        ai.models.embedContent({
+        getAiClient().models.embedContent({
           model: 'gemini-embedding-2',
           contents: text,
           config: {
@@ -249,7 +262,7 @@ ${sourcesContextBlock}
 ======================================================================`;
     }
 
-    if (!apiKey) {
+    if (!getApiKey()) {
       if (strictKnowledge) {
         return res.status(503).json({
           response:
@@ -311,7 +324,7 @@ ${sourcesContextBlock}
     let response: any;
     try {
       response = await Promise.race([
-        ai.models.generateContent({
+        getAiClient().models.generateContent({
           model: 'gemini-4-hydrogen',
           contents: contents,
           config: {
@@ -324,7 +337,7 @@ ${sourcesContextBlock}
     } catch (primaryErr: any) {
       console.warn('Primary gemini-4-hydrogen fallback to gemini-3.1-flash-lite:', primaryErr?.message || primaryErr);
       response = await Promise.race([
-        ai.models.generateContent({
+        getAiClient().models.generateContent({
           model: 'gemini-3.1-flash-lite',
           contents: contents,
           config: {
@@ -405,7 +418,7 @@ async function startServer() {
     const vite = await createServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR !== 'true',
+        hmr: false,
       },
       appType: 'spa',
     });
@@ -418,7 +431,7 @@ async function startServer() {
   }
 
   if (!process.env.VERCEL) {
-    const PORT = Number(process.env.PORT) || 3000;
+    const PORT = process.env.NODE_ENV === 'production' ? Number(process.env.PORT) || 3000 : 3000;
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server listening on http://0.0.0.0:${PORT}`);
     });

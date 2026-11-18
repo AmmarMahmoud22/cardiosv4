@@ -82,11 +82,11 @@ const compressImage = (dataUrl: string, maxWidth = 250, maxHeight = 250, quality
 export default function DoctorSettingsModal({
   isOpen,
   onClose,
-  doctorId = 'doc-1',
+  doctorId = '',
   initialClinicName = 'عيادة أمراض القلب والقسطرة',
-  initialDoctorName = 'د/ عمار محمود',
+  initialDoctorName = '',
   initialSpecialty = 'استشاري أمراض القلب والقسطرة التداخلية',
-  clinicCode = 'CLINIC-AMMAR-101',
+  clinicCode = '',
   onSaveSuccess
 }: {
   isOpen: boolean;
@@ -124,6 +124,10 @@ export default function DoctorSettingsModal({
     if (!isOpen) return;
 
     const fetchSettings = async () => {
+      if (!doctorId) {
+        setLoading(false);
+        return;
+      }
       setLoading(true);
       try {
         const snap = await getDoc(doc(db, 'doctor_schedules', doctorId));
@@ -194,6 +198,10 @@ export default function DoctorSettingsModal({
 
   // Instant & Fast Save
   const handleSave = async () => {
+    if (!doctorId) {
+      setErrorMsg('معرف الطبيب غير متوفر لحفظ الإعدادات.');
+      return;
+    }
     setSaving(true);
     setSavedSuccess(false);
 
@@ -203,12 +211,13 @@ export default function DoctorSettingsModal({
         finalLogo = await compressImage(finalLogo, 250, 250, 0.8);
       }
 
-      const scheduleData: DoctorScheduleSettings = {
+      const scheduleData: DoctorScheduleSettings & { clinicCodeUpper?: string } = {
         doctorId,
         doctorName: doctorName.trim(),
         clinicName: clinicName.trim(),
         specialty: specialty.trim(),
-        clinicCode,
+        clinicCode: clinicCode.trim(),
+        clinicCodeUpper: clinicCode.trim().toUpperCase(),
         clinicLogoUrl: finalLogo,
         clinicLogoIcon: selectedPresetIcon,
         workingDays,
@@ -489,7 +498,7 @@ export default function DoctorSettingsModal({
                         type="text"
                         value={doctorName}
                         onChange={(e) => setDoctorName(e.target.value)}
-                        placeholder="د/ عمار محمود"
+                        placeholder="د/ اسم الطبيب"
                         className="w-full bg-slate-50 border border-slate-200 focus:bg-white focus:border-teal-600 rounded-xl px-4 py-2.5 text-xs text-slate-900 font-bold"
                       />
                     </div>

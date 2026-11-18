@@ -1,16 +1,25 @@
 import React, {useState, useEffect} from 'react';
-import {addDoc, collection, getDocs} from 'firebase/firestore';
-import {db} from '../lib/firebase';
+import {addDoc, collection, getDocs, query, where} from 'firebase/firestore';
+import {onAuthStateChanged} from 'firebase/auth';
+import {db, auth} from '../lib/firebase';
 import {Patient} from '../types/ehr';
+import {StaffRole} from '../types/clinic';
 import {Calendar as CalendarIcon, X} from 'lucide-react';
 
 export default function AppointmentBookingModal({
   onClose,
-  doctorId = 'doc-1'
+  doctorId = '',
+  clinicCode = '',
+  staffUids = [],
+  staffRole = 'doctor'
 }: {
   onClose: () => void;
   doctorId?: string;
+  clinicCode?: string;
+  staffUids?: string[];
+  staffRole?: StaffRole;
 }) {
+  const [authUid, setAuthUid] = useState<string>(() => auth.currentUser?.uid || '');
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientId, setPatientId] = useState('');
   const [type, setType] = useState<'كشف جديد' | 'استشارة ومتابعة' | 'فحص إيكو / رسم قلب'>('كشف جديد');
@@ -18,18 +27,26 @@ export default function AppointmentBookingModal({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setAuthUid(u?.uid || ''));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
     const fetchPatients = async () => {
-      const q = collection(db, 'patients');
-      const snapshot = await getDocs(q);
-      const allPatients = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()})) as Patient[];
-      if (doctorId) {
-        setPatients(allPatients.filter((p: any) => p.doctorId === doctorId || (!p.doctorId && doctorId === 'doc-1')));
-      } else {
-        setPatients(allPatients);
+      if (!doctorId || !authUid) {
+        setPatients([]);
+        return;
       }
+      const isRec = staffRole === 'receptionist';
+      const q = isRec
+        ? query(collection(db, 'patients'), where('staffUids', 'array-contains', authUid))
+        : query(collection(db, 'patients'), where('doctorId', '==', doctorId));
+      const snapshot = await getDocs(q);
+      const allPatients = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()})) as (Patient & { doctorId?: string })[];
+      setPatients(isRec ? allPatients.filter((p) => p.doctorId === doctorId) : allPatients);
     };
     fetchPatients();
-  }, [doctorId]);
+  }, [doctorId, staffRole, authUid]);
 
   const saveAppointment = async () => {
     if (patientId && startTime) {
@@ -40,6 +57,8 @@ export default function AppointmentBookingModal({
           patientId,
           patientName: patient?.name,
           doctorId,
+          clinicCode,
+          staffUids,
           startTime,
           type,
           status: 'Scheduled',

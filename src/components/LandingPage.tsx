@@ -24,8 +24,9 @@ import {
   Lock,
   ArrowLeft
 } from 'lucide-react';
-import {trackPageView, trackDemoTrial} from '../lib/analytics';
+import {trackPageView} from '../lib/analytics';
 import {useLanguage, LanguageSwitcher} from '../context/LanguageContext';
+import {PWAInstallButton} from './PWAInstallButton';
 
 export default function LandingPage({
   onLaunch,
@@ -158,16 +159,16 @@ export default function LandingPage({
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-teal-500 selection:text-white" dir={direction}>
+    <div className="min-h-screen overflow-x-hidden bg-slate-50 text-slate-800 font-sans selection:bg-teal-500 selection:text-white" dir={direction}>
       {/* 1. TOP NAVBAR (Clean 3-Zone Contract) */}
       <header className="sticky top-0 z-40 bg-white/90 backdrop-blur-md border-b border-slate-200/60 transition-all">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-6">
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-2 sm:gap-6">
           {/* Zone 1: Clean Brand Wordmark */}
-          <a href="/" className="flex items-center gap-2.5 shrink-0">
-            <div className="w-9 h-9 rounded-xl bg-teal-600 text-white flex items-center justify-center shadow-sm">
-              <HeartPulse size={20} />
+          <a href="/" className="flex items-center gap-2 shrink-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-teal-600 text-white flex items-center justify-center shadow-sm">
+              <HeartPulse size={18} />
             </div>
-            <span className="text-xl font-black tracking-tight text-slate-900 whitespace-nowrap">
+            <span className="text-sm sm:text-xl font-black tracking-tight text-slate-900 whitespace-nowrap">
               {isRTL ? 'منظومة كارديوس' : 'CardioSaaS Cloud'}
             </span>
           </a>
@@ -189,26 +190,29 @@ export default function LandingPage({
           </nav>
 
           {/* Zone 3: Single Primary Action & Language Switcher */}
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            <div className="hidden sm:block">
+              <PWAInstallButton />
+            </div>
             <LanguageSwitcher />
 
             <button
               onClick={() => {
                 if (onOpenAuthModal) onOpenAuthModal('doctor', 'login');
+                else onLaunch();
               }}
-              className="px-4 py-2 text-xs sm:text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-2.5 sm:px-4 py-2 text-[11px] sm:text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              {isRTL ? 'تسجيل الدخول' : 'Sign In'}
+              {isRTL ? 'دخول' : 'Sign In'}
             </button>
             <button
               onClick={() => {
-                trackDemoTrial('doctor', 'دخول مباشر لديمو كارديوس');
-                onLaunch();
+                if (onOpenAuthModal) onOpenAuthModal('doctor', 'signup');
               }}
-              className="px-4 py-2 text-xs sm:text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl transition-colors shadow-sm whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
+              className="px-2.5 sm:px-4 py-2 text-[11px] sm:text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl transition-colors shadow-sm whitespace-nowrap shrink-0 flex items-center gap-1 sm:gap-1.5 cursor-pointer"
             >
-              <span>{isRTL ? 'تجربة الديمو' : 'Live Demo'}</span>
-              <ArrowLeft size={16} className={isRTL ? '' : 'transform -scale-x-100'} />
+              <span>{isRTL ? 'تسجيل' : 'Start'}</span>
+              <ArrowLeft size={14} className={isRTL ? '' : 'transform -scale-x-100'} />
             </button>
           </div>
         </div>
@@ -237,22 +241,22 @@ export default function LandingPage({
             <div className="flex flex-wrap items-center justify-center gap-3">
               <button
                 onClick={() => {
-                  trackDemoTrial('doctor', 'دخول ديمو العيادة من الهيرو');
-                  onLaunch();
+                  if (onOpenAuthModal) onOpenAuthModal('doctor', 'signup');
                 }}
-                className="px-6 py-3.5 bg-teal-600 hover:bg-teal-700 text-white rounded-2xl font-bold text-sm shadow-sm transition-all flex items-center gap-2"
+                className="px-6 py-3.5 bg-teal-600 hover:bg-teal-700 text-white rounded-2xl font-bold text-sm shadow-sm transition-all flex items-center gap-2 cursor-pointer"
               >
-                <span>ابدأ تجربة المنظومة مجاناً</span>
+                <span>تسجيل عيادة أو معمل جديد</span>
                 <ArrowLeft size={16} />
               </button>
 
               <button
                 onClick={() => {
-                  if (onOpenAuthModal) onOpenAuthModal('doctor', 'signup');
+                  if (onOpenAuthModal) onOpenAuthModal('doctor', 'login');
+                  else onLaunch();
                 }}
-                className="px-6 py-3.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-2xl font-bold text-sm transition-all shadow-sm"
+                className="px-6 py-3.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-2xl font-bold text-sm transition-all shadow-sm cursor-pointer"
               >
-                انضم كعيادة أو معمل جديد
+                تسجيل الدخول
               </button>
             </div>
           </div>
@@ -272,10 +276,13 @@ export default function LandingPage({
                   </p>
                 </div>
                 <button
-                  onClick={onLaunch}
-                  className="w-full py-2.5 bg-white hover:bg-teal-50 border border-slate-200 hover:border-teal-300 text-teal-700 rounded-xl text-xs font-bold transition-all text-center"
+                  onClick={() => {
+                    if (onOpenAuthModal) onOpenAuthModal('doctor', 'login');
+                    else onLaunch();
+                  }}
+                  className="w-full py-2.5 bg-white hover:bg-teal-50 border border-slate-200 hover:border-teal-300 text-teal-700 rounded-xl text-xs font-bold transition-all text-center cursor-pointer"
                 >
-                  دخول عيادة ديمو
+                  دخول بوابة الطبيب
                 </button>
               </div>
 
@@ -292,13 +299,12 @@ export default function LandingPage({
                 </div>
                 <button
                   onClick={() => {
-                    trackDemoTrial('lab', 'دخول ديمو المعمل');
-                    if (onOpenLabPortal) onOpenLabPortal();
-                    else if (onOpenAuthModal) onOpenAuthModal('lab', 'login');
+                    if (onOpenAuthModal) onOpenAuthModal('lab', 'login');
+                    else if (onOpenLabPortal) onOpenLabPortal();
                   }}
-                  className="w-full py-2.5 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 text-blue-700 rounded-xl text-xs font-bold transition-all text-center"
+                  className="w-full py-2.5 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 text-blue-700 rounded-xl text-xs font-bold transition-all text-center cursor-pointer"
                 >
-                  بوابة المعمل (PIN: 8888)
+                  دخول بوابة المعمل
                 </button>
               </div>
 
@@ -315,13 +321,11 @@ export default function LandingPage({
                 </div>
                 <button
                   onClick={() => {
-                    trackDemoTrial('patient', 'تجربة مسح كارت المريض');
                     if (onOpenAuthModal) onOpenAuthModal('patient', 'login');
-                    else if (onOpenPatientPortal) onOpenPatientPortal('1');
                   }}
-                  className="w-full py-2.5 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-emerald-700 rounded-xl text-xs font-bold transition-all text-center"
+                  className="w-full py-2.5 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-emerald-700 rounded-xl text-xs font-bold transition-all text-center cursor-pointer"
                 >
-                  تجربة كارت المريض (#1)
+                  دخول بوابة المريض (QR)
                 </button>
               </div>
             </div>
@@ -379,22 +383,24 @@ export default function LandingPage({
             </div>
           </div>
 
-          {/* Clean Callout Box (Inspired by bottom card in image_7756bcb9.png) */}
+          {/* Clean Callout Box */}
           <div className="mt-12 bg-amber-50/80 border border-amber-200/80 rounded-3xl p-8 text-center max-w-3xl mx-auto">
             <span className="text-xs font-bold text-amber-800 bg-amber-100 px-3 py-1 rounded-full mb-3 inline-block">
-              يلا نبدأ على نظافة
+              انضم إلى الشبكة الطبية
             </span>
             <h3 className="text-xl sm:text-2xl font-black text-slate-900 mb-2">
-              جرّب المنظومة الآن بنفسك في أجزاء من الثانية
+              انضم كعيادة قلب أو معمل تحاليل معتمد
             </h3>
             <p className="text-xs sm:text-sm text-slate-600 mb-6 max-w-xl mx-auto">
-              يمكنك الدخول كطبيب، معمل تحاليل، أو تجربة مسح كارت المريض لمعاينة السرعة والتنظيم المريح.
+              سجّل حساب عيادتك أو معملك الآن، ليتم مراجعته واعتماده من إدارة المنصة وبدء العمل مباشرة.
             </p>
             <button
-              onClick={onLaunch}
-              className="px-6 py-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs sm:text-sm transition-all shadow-sm"
+              onClick={() => {
+                if (onOpenAuthModal) onOpenAuthModal('doctor', 'signup');
+              }}
+              className="px-6 py-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs sm:text-sm transition-all shadow-sm cursor-pointer"
             >
-              دخول الحساب التجريبي المباشر
+              إنشاء حساب عيادة أو معمل
             </button>
           </div>
         </div>

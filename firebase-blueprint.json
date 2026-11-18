@@ -1,125 +1,638 @@
 {
   "entities": {
-    "Message": {
-      "title": "Message",
-      "description": "Chat message between doctor and patient",
+    "Admin": {
+      "title": "Admin",
+      "description": "Platform SuperAdmin authorization record keyed by Firebase Auth UID",
       "type": "object",
       "properties": {
-        "patientId": { "type": "string" },
-        "sender": { "type": "string" },
-        "text": { "type": "string", "maxLength": 1000 },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 200 },
+        "name": { "type": "string", "maxLength": 200 },
+        "role": { "type": "string", "enum": ["superadmin"] },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
-      "required": ["patientId", "sender", "text", "timestamp"]
+      "required": ["uid", "email", "role"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Authenticated user identity and role summary",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "email": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "role": { "type": "string", "maxLength": 40 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "doctorName": { "type": "string", "maxLength": 200 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "labCode": { "type": "string", "maxLength": 64 },
+        "roleTitle": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended"] },
+        "clinicWhatsAppNumber": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email", "role", "status"]
+    },
+    "SystemUser": {
+      "title": "SystemUser",
+      "description": "Administrative user directory entry synchronized with SuperAdmin portal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "email": { "type": "string", "maxLength": 200 },
+        "role": {
+          "type": "string",
+          "enum": ["Cardiologist", "Lab / Imaging Center", "Patient", "System Administrator", "Clinic Staff"]
+        },
+        "status": { "type": "string", "enum": ["Active", "Inactive"] },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "doctorName": { "type": "string", "maxLength": 200 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "roleTitle": { "type": "string", "maxLength": 64 },
+        "licenseNumber": { "type": "string", "maxLength": 100 },
+        "facilityName": { "type": "string", "maxLength": 200 },
+        "patientFileId": { "type": "string", "maxLength": 128 },
+        "patientToken": { "type": "string", "maxLength": 128 },
+        "lastLogin": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name", "email", "role", "status"]
+    },
+    "Doctor": {
+      "title": "Doctor",
+      "description": "Cardiologist practitioner clinic profile, subscription quota, and active staff membership",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "email": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "clinicName": { "type": "string", "maxLength": 200 },
+        "specialty": { "type": "string", "maxLength": 200 },
+        "staffUids": { "type": "array", "description": "Up to 10 active clinic staff UIDs" },
+        "planId": { "type": "string", "maxLength": 128 },
+        "planName": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended", "trial", "expired"] },
+        "subscriptionExpiresAt": { "type": "string", "maxLength": 64 },
+        "aiQueriesUsed": { "type": "number" },
+        "aiQuotaLimit": { "type": "number" },
+        "isAiBlocked": { "type": "boolean" },
+        "maxPatientsLimit": { "type": "number" },
+        "clinicWhatsAppNumber": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "name", "clinicCode", "status"]
+    },
+    "DoctorSchedule": {
+      "title": "DoctorSchedule",
+      "description": "Public non-PII clinic booking directory, working days, capacities, and branding",
+      "type": "object",
+      "properties": {
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "doctorName": { "type": "string", "maxLength": 200 },
+        "clinicName": { "type": "string", "maxLength": 200 },
+        "specialty": { "type": "string", "maxLength": 200 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "clinicCodeUpper": { "type": "string", "maxLength": 64 },
+        "clinicLogoUrl": { "type": "string", "maxLength": 200000 },
+        "clinicLogoIcon": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "maxLength": 32 },
+        "staffUids": { "type": "array" },
+        "workingDays": { "type": "array" },
+        "instructions": { "type": "string", "maxLength": 1000 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["doctorId", "clinicCode"]
+    },
+    "SlotCount": {
+      "title": "SlotCount",
+      "description": "Anonymous daily appointment counter per clinic date (no patient PII)",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "count": { "type": "number" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["date", "doctorId", "count"]
+    },
+    "ClinicStaff": {
+      "title": "ClinicStaff",
+      "description": "Receptionist or Nurse account scoped to a specific cardiologist clinic",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "uid": { "type": "string", "maxLength": 128 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "doctorName": { "type": "string", "maxLength": 200 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 200 },
+        "email": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "roleTitle": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "createdBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "uid", "doctorId", "name", "email", "status"]
+    },
+    "Lab": {
+      "title": "Lab",
+      "description": "Diagnostic medical laboratory partner account and linked clinic codes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "labCode": { "type": "string", "maxLength": 64 },
+        "technicianName": { "type": "string", "maxLength": 200 },
+        "email": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "branch": { "type": "string", "maxLength": 120 },
+        "accreditation": { "type": "string", "maxLength": 120 },
+        "linkedClinics": { "type": "array" },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended"] }
+      },
+      "required": ["id", "name", "labCode", "status"]
     },
     "Patient": {
       "title": "Patient",
-      "description": "Cardiology clinic patient medical record and user profile",
+      "description": "Cardiology clinic patient medical record strictly isolated to owning clinic, active staff, and linked labs",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "authUid": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "doctorName": { "type": "string", "maxLength": 200 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "staffUids": { "type": "array" },
         "name": { "type": "string", "maxLength": 200 },
-        "email": { "type": "string" },
-        "phone": { "type": "string" },
-        "dob": { "type": "string" },
-        "status": { "type": "string" },
-        "diagnosis": { "type": "string" },
-        "securityToken": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "nameEn": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "dob": { "type": "string", "maxLength": 32 },
+        "age": { "type": "number" },
+        "gender": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "maxLength": 120 },
+        "diagnosis": { "type": "string", "maxLength": 300 },
+        "securityToken": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "maxLength": 64 }
       },
-      "required": ["name"]
+      "required": ["doctorId", "name"]
     },
     "Vital": {
       "title": "Vital",
-      "description": "Blood pressure and heart rate measurement logged by patient or clinic",
+      "description": "Blood pressure and heart rate measurement logged by clinic or patient",
       "type": "object",
       "properties": {
         "systolic": { "type": "number" },
         "diastolic": { "type": "number" },
         "heartRate": { "type": "number" },
-        "patientId": { "type": "string" },
-        "timestamp": { "type": "string", "format": "date-time" }
+        "patientId": { "type": "string", "maxLength": 128 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "staffUids": { "type": "array" },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "maxLength": 32 },
+        "timestamp": { "type": "string", "maxLength": 64 }
       },
       "required": ["systolic", "diastolic", "patientId", "timestamp"]
     },
-    "Plan": {
-      "title": "Plan",
-      "description": "Dynamic customizable subscription tier configured by platform admin",
+    "Prescription": {
+      "title": "Prescription",
+      "description": "Doctor digital cardiology prescription synced to patient record",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
+        "medications": { "type": "array" },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "doctorName": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["medications", "createdAt"]
+    },
+    "LabResult": {
+      "title": "LabResult",
+      "description": "Longitudinal laboratory biomarker entry under patient record",
+      "type": "object",
+      "properties": {
+        "ldl": { "type": "string", "maxLength": 64 },
+        "hdl": { "type": "string", "maxLength": 64 },
+        "creatinine": { "type": "string", "maxLength": 64 },
+        "egfr": { "type": "string", "maxLength": 64 },
+        "potassium": { "type": "string", "maxLength": 64 },
+        "hba1c": { "type": "string", "maxLength": 64 },
+        "troponin": { "type": "string", "maxLength": 64 },
+        "labCode": { "type": "string", "maxLength": 64 },
+        "labId": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["labId"]
+    },
+    "PatientNotification": {
+      "title": "PatientNotification",
+      "description": "Clinical alert or lab readiness notification inside patient record",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 1500 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "read": { "type": "boolean" }
+      },
+      "required": ["type", "title", "message", "createdAt"]
+    },
+    "CardiologyReport": {
+      "title": "CardiologyReport",
+      "description": "Saved echocardiogram or ECG interpretation report",
+      "type": "object",
+      "properties": {
+        "reportType": { "type": "string", "maxLength": 120 },
+        "findings": { "type": "string", "maxLength": 4000 },
+        "conclusion": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["createdAt"]
+    },
+    "Referral": {
+      "title": "Referral",
+      "description": "Hospital or cath-lab specialist referral record",
+      "type": "object",
+      "properties": {
+        "specialist": { "type": "string", "maxLength": 200 },
+        "reason": { "type": "string", "maxLength": 1500 },
+        "date": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["specialist", "reason", "date", "status"]
+    },
+    "PatientAttachment": {
+      "title": "PatientAttachment",
+      "description": "Compressed ECG/Echo/X-Ray/Cath image or PDF stored in patient record",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string", "maxLength": 128 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "staffUids": { "type": "array" },
+        "title": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "enum": ["ECG", "Echo", "X-Ray", "Cath", "Other"] },
+        "mimeType": { "type": "string", "maxLength": 120 },
+        "fileName": { "type": "string", "maxLength": 255 },
+        "fileSizeBytes": { "type": "number" },
+        "dataUrl": { "type": "string", "maxLength": 850000 },
+        "studyDate": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "uploadedBy": { "type": "string", "maxLength": 200 },
+        "uploadedByRole": { "type": "string", "enum": ["doctor", "receptionist"] },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["patientId", "doctorId", "title", "category", "dataUrl", "createdAt"]
+    },
+    "ClinicContract": {
+      "title": "ClinicContract",
+      "description": "Syndicate, medical insurance, or corporate billing contract for a clinic",
+      "type": "object",
+      "properties": {
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "staffUids": { "type": "array" },
+        "name": { "type": "string", "maxLength": 200 },
+        "category": { "type": "string", "enum": ["cash", "syndicate", "insurance", "corporate"] },
+        "discountPercent": { "type": "number" },
+        "coveragePercent": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["doctorId", "name", "category", "isActive", "createdAt"]
+    },
+    "ClinicInvoice": {
+      "title": "ClinicInvoice",
+      "description": "Clinic consultation, echo, or ECG billing receipt and cashbox ledger item",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string", "maxLength": 64 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "staffUids": { "type": "array" },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "patientPhone": { "type": "string", "maxLength": 40 },
+        "serviceType": { "type": "string", "enum": ["consultation", "followup", "echo", "ecg", "other"] },
+        "serviceLabel": { "type": "string", "maxLength": 200 },
+        "baseAmount": { "type": "number" },
+        "contractId": { "type": "string", "maxLength": 128 },
+        "contractName": { "type": "string", "maxLength": 200 },
+        "discountPercent": { "type": "number" },
+        "discountAmount": { "type": "number" },
+        "patientPayable": { "type": "number" },
+        "entityShare": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["Cash", "InstaPay", "Card"] },
+        "status": { "type": "string", "enum": ["Paid", "Unpaid"] },
+        "date": { "type": "string", "maxLength": 32 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "paidAt": { "type": "string", "maxLength": 64 },
+        "createdBy": { "type": "string", "maxLength": 200 },
+        "createdByRole": { "type": "string", "enum": ["doctor", "receptionist"] },
+        "notes": { "type": "string", "maxLength": 1000 }
+      },
+      "required": ["invoiceNumber", "doctorId", "patientId", "serviceType", "patientPayable", "paymentMethod", "status", "createdAt"]
+    },
+    "LabOrder": {
+      "title": "LabOrder",
+      "description": "Physician test requisition sent to linked laboratory queue",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "staffUids": { "type": "array" },
+        "doctorName": { "type": "string", "maxLength": 200 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "tests": { "type": "array" },
+        "priority": { "type": "string", "enum": ["urgent", "routine"] },
+        "instructions": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["patientId", "doctorId", "clinicCode", "tests", "priority", "status", "createdAt"]
+    },
+    "Appointment": {
+      "title": "Appointment",
+      "description": "Scheduled clinic visit or QR booking slot",
+      "type": "object",
+      "properties": {
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "staffUids": { "type": "array" },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "patientPhone": { "type": "string", "maxLength": 40 },
+        "patientAge": { "type": "string", "maxLength": 20 },
+        "date": { "type": "string", "maxLength": 32 },
+        "startTime": { "type": "string", "maxLength": 64 },
+        "queueNumber": { "type": "number" },
+        "type": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["Scheduled", "Completed", "Cancelled", "No-Show", "Waitlist"] },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["doctorId", "patientName", "status", "createdAt"]
+    },
+    "Waitlist": {
+      "title": "Waitlist",
+      "description": "Patient standby booking request when daily capacity is full",
+      "type": "object",
+      "properties": {
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "clinicCode": { "type": "string", "maxLength": 64 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "patientPhone": { "type": "string", "maxLength": 40 },
+        "patientAge": { "type": "string", "maxLength": 20 },
+        "requestedDate": { "type": "string", "maxLength": 32 },
+        "suggestedDate": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["Pending", "Confirmed", "Cancelled"] },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["doctorId", "patientName", "requestedDate", "status", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Direct clinical message between clinic and patient",
+      "type": "object",
+      "properties": {
+        "patientId": { "type": "string", "maxLength": 128 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "sender": { "type": "string", "enum": ["doctor", "patient"] },
+        "text": { "type": "string", "maxLength": 1000 },
+        "timestamp": { "type": "string", "format": "date-time", "maxLength": 64 }
+      },
+      "required": ["patientId", "sender", "text", "timestamp"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "Lab-to-doctor urgent biomarker notification log",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 1500 },
+        "patientId": { "type": "string", "maxLength": 128 },
+        "patientName": { "type": "string", "maxLength": 200 },
+        "doctorId": { "type": "string", "maxLength": 128 },
+        "labId": { "type": "string", "maxLength": 128 },
+        "technician": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "read": { "type": "boolean" },
+        "urgent": { "type": "boolean" }
+      },
+      "required": ["title", "message", "patientId", "labId", "createdAt"]
+    },
+    "Plan": {
+      "title": "Plan",
+      "description": "Dynamic customizable subscription tier configured by platform SuperAdmin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
         "name": { "type": "string", "maxLength": 100 },
         "description": { "type": "string", "maxLength": 500 },
         "price": { "type": "number" },
-        "currency": { "type": "string" },
-        "billingCycle": { "type": "string" },
+        "currency": { "type": "string", "maxLength": 16 },
+        "billingCycle": { "type": "string", "maxLength": 32 },
         "maxPatients": { "type": "number" },
         "aiMonthlyQuota": { "type": "number" },
         "isDefault": { "type": "boolean" },
-        "badgeColor": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "badgeColor": { "type": "string", "maxLength": 32 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["id", "name", "price", "billingCycle"]
     },
-    "Doctor": {
-      "title": "Doctor",
-      "description": "Cardiologist practitioner clinic profile and subscription status",
+    "PlatformAnalyticsMetrics": {
+      "title": "PlatformAnalyticsMetrics",
+      "description": "Aggregated platform usage counters visible to SuperAdmin",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string", "maxLength": 200 },
-        "clinicCode": { "type": "string" },
-        "clinicName": { "type": "string" },
-        "specialty": { "type": "string" },
-        "planId": { "type": "string" },
-        "planName": { "type": "string" },
-        "status": { "type": "string" },
-        "aiQueriesUsed": { "type": "number" },
-        "aiQuotaLimit": { "type": "number" },
-        "isAiBlocked": { "type": "boolean" }
-      },
-      "required": ["id", "name", "clinicCode"]
+        "totalVisits": { "type": "number" },
+        "uniqueVisitors": { "type": "number" },
+        "totalSignups": { "type": "number" },
+        "clinicSignups": { "type": "number" },
+        "labSignups": { "type": "number" },
+        "lastUpdated": { "type": "string", "maxLength": 64 }
+      }
     },
-    "Lab": {
-      "title": "Lab",
-      "description": "Diagnostic medical laboratory partner profile",
+    "PlatformAnalyticsEvent": {
+      "title": "PlatformAnalyticsEvent",
+      "description": "Timestamped platform usage and audit event",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string", "maxLength": 200 },
-        "labCode": { "type": "string" },
-        "technicianName": { "type": "string" },
-        "phone": { "type": "string" },
-        "status": { "type": "string" }
+        "id": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 200 },
+        "details": { "type": "string", "maxLength": 1000 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "device": { "type": "string", "maxLength": 120 },
+        "path": { "type": "string", "maxLength": 200 }
       },
-      "required": ["id", "name", "labCode"]
+      "required": ["id", "type", "title", "timestamp"]
+    },
+    "AiKnowledgeSource": {
+      "title": "AiKnowledgeSource",
+      "description": "Uploaded clinical guideline PDF source for Gemini clinical grounding",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 300 },
+        "category": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "title"]
+    },
+    "AiKnowledgeChunk": {
+      "title": "AiKnowledgeChunk",
+      "description": "Text chunk derived from clinical guideline document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "sourceId": { "type": "string", "maxLength": 128 },
+        "text": { "type": "string", "maxLength": 8000 }
+      },
+      "required": ["id", "sourceId", "text"]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "Global platform configuration and seed state flags managed by SuperAdmin",
+      "type": "object",
+      "properties": {
+        "doctorsSeeded": { "type": "boolean" },
+        "labsSeeded": { "type": "boolean" },
+        "systemUsersSeeded": { "type": "boolean" },
+        "demoPurged": { "type": "boolean" },
+        "primaryAdminOnlyPurged_v1": { "type": "boolean" },
+        "deletedIds": { "type": "array" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      }
     }
   },
   "firestore": {
-    "/messages/{messageId}": {
-      "schema": "Message",
-      "description": "Collection of chat messages"
+    "/admins/{adminUid}": {
+      "schema": "Admin",
+      "description": "Verified SuperAdmin role registry"
     },
-    "/patients/{patientId}": {
-      "schema": "Patient",
-      "description": "Collection of patient clinical files"
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User identity and role lookup document"
     },
-    "/patients/{patientId}/vitals/{vitalId}": {
-      "schema": "Vital",
-      "description": "Subcollection of vital sign readings"
-    },
-    "/plans/{planId}": {
-      "schema": "Plan",
-      "description": "Dynamic subscription tiers managed by platform super admin"
+    "/system_users/{userId}": {
+      "schema": "SystemUser",
+      "description": "SuperAdmin user management table"
     },
     "/doctors/{doctorId}": {
       "schema": "Doctor",
-      "description": "Cardiologist accounts and subscription quotas"
+      "description": "Cardiologist accounts, subscription status, and active staffUids"
+    },
+    "/doctor_schedules/{doctorId}": {
+      "schema": "DoctorSchedule",
+      "description": "Non-PII public clinic schedule directory and QR poster branding"
+    },
+    "/doctor_schedules/{doctorId}/slot_counts/{dateId}": {
+      "schema": "SlotCount",
+      "description": "Non-PII daily booked count per clinic day"
+    },
+    "/clinic_staff/{staffUid}": {
+      "schema": "ClinicStaff",
+      "description": "Receptionist and nurse staff accounts linked to a clinic"
     },
     "/labs/{labId}": {
       "schema": "Lab",
-      "description": "Diagnostic laboratory partner accounts"
+      "description": "Diagnostic laboratory partner profiles and linked clinic codes"
+    },
+    "/patients/{patientId}": {
+      "schema": "Patient",
+      "description": "Cardiology patient clinical records"
+    },
+    "/patients/{patientId}/vitals/{vitalId}": {
+      "schema": "Vital",
+      "description": "Patient vital sign readings"
+    },
+    "/patients/{patientId}/prescriptions/{rxId}": {
+      "schema": "Prescription",
+      "description": "Patient electronic prescriptions"
+    },
+    "/patients/{patientId}/lab_results/{resultId}": {
+      "schema": "LabResult",
+      "description": "Patient lab test history entries"
+    },
+    "/patients/{patientId}/notifications/{notifId}": {
+      "schema": "PatientNotification",
+      "description": "Patient alerts for lab results and doctor directives"
+    },
+    "/patients/{patientId}/cardiology_reports/{reportId}": {
+      "schema": "CardiologyReport",
+      "description": "Patient echo and ECG reports"
+    },
+    "/patients/{patientId}/referrals/{referralId}": {
+      "schema": "Referral",
+      "description": "Patient hospital referrals"
+    },
+    "/patients/{patientId}/invoices/{invoiceId}": {
+      "schema": "ClinicInvoice",
+      "description": "Per-patient invoice receipts"
+    },
+    "/patients/{patientId}/attachments/{attachmentId}": {
+      "schema": "PatientAttachment",
+      "description": "ECG, Echo, X-Ray, and Cath image/PDF attachments"
+    },
+    "/clinic_contracts/{contractId}": {
+      "schema": "ClinicContract",
+      "description": "Clinic medical insurance and syndicate contracts"
+    },
+    "/clinic_invoices/{invoiceId}": {
+      "schema": "ClinicInvoice",
+      "description": "Clinic cashbox invoices ledger"
+    },
+    "/lab_orders/{orderId}": {
+      "schema": "LabOrder",
+      "description": "Doctor-to-lab biomarker test orders"
+    },
+    "/appointments/{appointmentId}": {
+      "schema": "Appointment",
+      "description": "Scheduled clinic visits"
+    },
+    "/waitlists/{waitlistId}": {
+      "schema": "Waitlist",
+      "description": "Patient standby queue requests"
+    },
+    "/vitals/{vitalAlertId}": {
+      "schema": "Vital",
+      "description": "Top-level high BP alerts pushed to clinic dashboard"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Direct doctor-patient messaging"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "Lab-to-doctor urgent notifications"
+    },
+    "/plans/{planId}": {
+      "schema": "Plan",
+      "description": "Platform subscription tiers"
+    },
+    "/platform_analytics/{docId}": {
+      "schema": "PlatformAnalyticsMetrics",
+      "description": "Platform aggregated traffic counters"
+    },
+    "/platform_analytics_events/{eventId}": {
+      "schema": "PlatformAnalyticsEvent",
+      "description": "Platform audit and activity feed"
+    },
+    "/ai_knowledge_sources/{sourceId}": {
+      "schema": "AiKnowledgeSource",
+      "description": "Medical guideline knowledge base documents"
+    },
+    "/ai_knowledge_chunks/{chunkId}": {
+      "schema": "AiKnowledgeChunk",
+      "description": "Searchable clinical guideline chunks"
+    },
+    "/system_config/{configId}": {
+      "schema": "SystemConfig",
+      "description": "Global system configuration and governance settings"
     }
   }
 }

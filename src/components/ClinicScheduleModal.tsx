@@ -17,10 +17,10 @@ const DEFAULT_DAYS: DoctorWorkingDay[] = [
 export default function ClinicScheduleModal({
   isOpen,
   onClose,
-  doctorId = 'doc-1',
-  doctorName = 'د/ عمار محمود',
+  doctorId = '',
+  doctorName = '',
   clinicName,
-  clinicCode = 'CLINIC-AMMAR-101',
+  clinicCode = '',
   onSaveSuccess
 }: {
   isOpen: boolean;
@@ -33,7 +33,7 @@ export default function ClinicScheduleModal({
 }) {
   const [workingDays, setWorkingDays] = useState<DoctorWorkingDay[]>(DEFAULT_DAYS);
   const [resolvedClinicName, setResolvedClinicName] = useState<string>(
-    clinicName || (doctorId === 'doc-1' ? 'عيادة أمراض القلب والقسطرة' : `عيادة ${doctorName}`)
+    clinicName || (doctorName ? `عيادة ${doctorName}` : 'عيادة أمراض القلب والقسطرة')
   );
   const [instructions, setInstructions] = useState<string>(
     'يرجى التواجد بالعيادة قبل موعد الدور بـ 15 دقيقة مع إحضار كافة الفحوصات والتحاليل الطبية السابقة.'
@@ -47,6 +47,10 @@ export default function ClinicScheduleModal({
     if (!isOpen) return;
 
     const fetchSchedule = async () => {
+      if (!doctorId) {
+        setLoading(false);
+        return;
+      }
       setLoading(true);
       setSaveError('');
       try {
@@ -94,16 +98,21 @@ export default function ClinicScheduleModal({
   };
 
   const handleSave = async () => {
+    if (!doctorId) {
+      setSaveError('معرف الطبيب غير متوفر لحفظ الجدول.');
+      return;
+    }
     setSaving(true);
     setSavedSuccess(false);
     setSaveError('');
 
     try {
-      const scheduleData: DoctorScheduleSettings = {
+      const scheduleData: DoctorScheduleSettings & { clinicCodeUpper?: string } = {
         doctorId,
         doctorName,
         clinicName: resolvedClinicName,
-        clinicCode,
+        clinicCode: clinicCode.trim(),
+        clinicCodeUpper: clinicCode.trim().toUpperCase(),
         workingDays,
         instructions,
         updatedAt: new Date().toISOString()

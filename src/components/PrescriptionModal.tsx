@@ -1,6 +1,6 @@
 import React, {useState, useEffect} from 'react';
 import {X, Plus, Trash2, Printer, Share2, Pill, Check, UserCheck} from 'lucide-react';
-import {collection, getDocs, addDoc} from 'firebase/firestore';
+import {collection, getDocs, addDoc, query, where} from 'firebase/firestore';
 import {db} from '../lib/firebase';
 import PrintableMedicalDocument from './PrintableMedicalDocument';
 
@@ -37,23 +37,19 @@ const CARDIOLOGY_DRUGS = [
 
 export default function PrescriptionModal({
   onClose,
-  doctorId = 'doc-1',
-  doctorName = 'د/ عمار محمود',
-  clinicName = 'عيادة أمراض القلب والقسطرة'
+  doctorId = '',
+  doctorName = '',
+  clinicName = 'عيادة أمراض القلب والأوعية الدموية'
 }: Props) {
   const [patients, setPatients] = useState<{id: string; name: string}[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<{id: string; name: string} | null>(null);
-  const [medications, setMedications] = useState<Medication[]>([
-    {name: 'Atorvastatin (Lipitor)', dosage: '20 mg', instructions: 'Take 1 tablet daily at bedtime', duration: '3 months'},
-    {name: 'Bisoprolol (Concor)', dosage: '5 mg', instructions: 'Take 1 tablet once daily in the morning', duration: '3 months'},
-    {name: 'Aspirin Protect', dosage: '81 mg', instructions: 'Take 1 tablet once daily after lunch', duration: 'Ongoing'}
-  ]);
+  const [medications, setMedications] = useState<Medication[]>([]);
 
   const [searchDrug, setSearchDrug] = useState('');
   const [dosage, setDosage] = useState('');
   const [instructions, setInstructions] = useState('');
   const [duration, setDuration] = useState('3 months');
-  const [doctorNotes, setDoctorNotes] = useState('Low salt diet. Monitor home blood pressure daily. Repeat lipid profile in 3 months.');
+  const [doctorNotes, setDoctorNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -61,30 +57,21 @@ export default function PrescriptionModal({
 
   useEffect(() => {
     const fetchPatients = async () => {
+      if (!doctorId) {
+        setPatients([]);
+        setSelectedPatient(null);
+        return;
+      }
       try {
-        const snap = await getDocs(collection(db, 'patients'));
+        const snap = await getDocs(query(collection(db, 'patients'), where('doctorId', '==', doctorId)));
         const list = snap.docs
-          .filter((d) => {
-            const pDocId = d.data().doctorId;
-            return pDocId ? pDocId === doctorId : doctorId === 'doc-1';
-          })
           .map(d => ({id: d.id, name: d.data().name || 'Patient ' + d.id}));
         setPatients(list);
         if (list.length > 0) setSelectedPatient(list[0]);
         else setSelectedPatient(null);
       } catch (e) {
-        if (doctorId === 'doc-1' || doctorId === 'doc-2') {
-          const fallback = [
-            {id: '1', name: 'Ahmed Hassan'},
-            {id: '2', name: 'Fatma Ali'},
-            {id: '3', name: 'Mohamed Ibrahim'},
-          ];
-          setPatients(fallback);
-          setSelectedPatient(fallback[0]);
-        } else {
-          setPatients([]);
-          setSelectedPatient(null);
-        }
+        setPatients([]);
+        setSelectedPatient(null);
       }
     };
     fetchPatients();
@@ -171,11 +158,15 @@ ${doctorNotes}
               }}
               className="bg-gray-800 text-white text-xs px-3 py-1.5 rounded-lg border border-gray-700 focus:outline-hidden focus:ring-2 focus:ring-blue-500 font-medium"
             >
-              {patients.map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.name} (ID: {p.id})
-                </option>
-              ))}
+              {patients.length === 0 ? (
+                <option value="">-- لا يوجد مرضى مسجلين --</option>
+              ) : (
+                patients.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} (ID: {p.id})
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
@@ -199,7 +190,8 @@ ${doctorNotes}
             </a>
             <button
               onClick={() => setShowPrintModal(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all shadow-xs cursor-pointer"
+              disabled={!selectedPatient}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg transition-all shadow-xs cursor-pointer"
             >
               <Printer size={14} />
               <span>معاينة وطباعة الروشتة المعتمدة (A4 / PDF)</span>
@@ -325,11 +317,11 @@ ${doctorNotes}
             <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 mb-6 flex justify-between text-xs">
               <div>
                 <span className="text-gray-500 font-medium">Patient Name (اسم المريض):</span>
-                <p className="font-bold text-gray-900 text-sm mt-0.5">{selectedPatient?.name || 'Ahmed Hassan'}</p>
+                <p className="font-bold text-gray-900 text-sm mt-0.5">{selectedPatient?.name || '—'}</p>
               </div>
               <div>
                 <span className="text-gray-500 font-medium">Patient ID:</span>
-                <p className="font-semibold text-gray-700 mt-0.5">{selectedPatient?.id || '001'}</p>
+                <p className="font-semibold text-gray-700 mt-0.5">{selectedPatient?.id || '—'}</p>
               </div>
               <div>
                 <span className="text-gray-500 font-medium">Specialty:</span>
@@ -378,20 +370,26 @@ ${doctorNotes}
 
             {/* Doctor Advice & Lifestyle notes */}
             <div className="p-4 bg-gray-50/70 rounded-xl border border-gray-200 text-xs mb-8">
-              <span className="font-bold text-gray-700 block mb-1">Doctor Advice & Lifestyle Instructions:</span>
-              <p className="text-gray-800 leading-relaxed">{doctorNotes}</p>
+              <label className="font-bold text-gray-700 block mb-1.5">Doctor Advice & Lifestyle Instructions:</label>
+              <textarea
+                rows={2}
+                value={doctorNotes}
+                onChange={(e) => setDoctorNotes(e.target.value)}
+                placeholder="أضف تعليمات الطبيب أو النظام الغذائي وموعد المتابعة..."
+                className="w-full text-xs p-2 bg-white border border-gray-200 rounded-lg text-gray-800 focus:ring-2 focus:ring-blue-500"
+              />
             </div>
 
             {/* Official Signature Footer */}
             <div className="pt-6 border-t border-gray-300 flex justify-between items-end text-xs text-gray-600 print-footer">
               <div>
                 <p className="font-bold text-gray-800">{clinicName} - روشتة إلكترونية معتمدة</p>
-                <p className="text-[11px] text-gray-400">Emergency Hotline: 01146963589</p>
+                <p className="text-[11px] text-gray-400">Cardios Clinical EHR System</p>
               </div>
               <div className="text-right">
                 <p className="text-xs text-gray-400 mb-6">Physician Signature & Stamp:</p>
                 <div className="w-52 border-b-2 border-gray-800 pb-1 text-center font-bold text-gray-900">
-                  {doctorName}
+                  {doctorName || 'الطبيب المعالج'}
                 </div>
                 <p className="text-[10px] text-gray-500 mt-1">استشاري أمراض القلب والقسطرة</p>
               </div>
@@ -400,19 +398,17 @@ ${doctorNotes}
         </div>
       </div>
 
-      {showPrintModal && (
+      {showPrintModal && selectedPatient && (
         <PrintableMedicalDocument
           type="prescription"
           data={{
-            patientName: selectedPatient?.name || 'مريض العيادة',
-            patientId: selectedPatient?.id || '1',
+            patientName: selectedPatient.name,
+            patientId: selectedPatient.id,
             date: new Date().toLocaleDateString('ar-EG'),
-            diagnosis: 'ارتفاع ضغط الدم ومتابعة دهون الدم وصحة القلب',
-            bloodPressure: '135/85',
-            heartRate: 74,
+            diagnosis: 'متابعة أمراض القلب والأوعية الدموية',
             medications: medications,
             doctorNotes: doctorNotes,
-            doctorName: doctorName,
+            doctorName: doctorName || 'الطبيب المعالج',
             doctorSpecialty: 'استشاري أمراض القلب والأوعية الدموية والقسطرة التداخلية',
             clinicName: clinicName,
             licenseNumber: 'ترخيص نقابة الأطباء المعتمد / ج.م.ع'

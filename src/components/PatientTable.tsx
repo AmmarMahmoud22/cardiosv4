@@ -1,8 +1,14 @@
-import React, {useEffect, useState} from 'react';
-import {collection, getDocs, deleteDoc, doc} from 'firebase/firestore';
-import {db} from '../lib/firebase';
+import React, {useEffect, useState, useMemo} from 'react';
+import {collection, getDocs, deleteDoc, doc, query, where, limit, startAfter, QueryDocumentSnapshot, DocumentData} from 'firebase/firestore';
+import {onAuthStateChanged} from 'firebase/auth';
+import {db, auth} from '../lib/firebase';
 import {Search, User, AlertTriangle, CheckCircle2, ChevronRight, Stethoscope, Sparkles, Filter, Trash2} from 'lucide-react';
 import {useLanguage} from '../context/LanguageContext';
+import {useDebouncedValue} from '../hooks/useDebouncedValue';
+import {PaginationControls} from './PaginationControls';
+import {StaffRole} from '../types/clinic';
+
+const SERVER_BATCH_SIZE = 100;
 
 interface Patient {
   id: string;
@@ -22,8 +28,9 @@ interface Patient {
 
 export default function PatientTable({
   onSelectPatient,
-  doctorId = 'doc-1',
+  doctorId = '',
   doctorName,
+  staffRole = 'doctor',
   onOpenNewPatientModal,
   onPatientDeleted,
   refreshKey = 0
@@ -31,29 +38,109 @@ export default function PatientTable({
   onSelectPatient: (id: string) => void;
   doctorId?: string;
   doctorName?: string;
+  staffRole?: StaffRole;
   onOpenNewPatientModal?: () => void;
   onPatientDeleted?: (id: string) => void;
   refreshKey?: number;
 }) {
   const { language, direction, isRTL } = useLanguage();
+  const isReceptionist = staffRole === 'receptionist';
   const [patients, setPatients] = useState<Patient[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const debouncedSearchTerm = useDebouncedValue(searchTerm, 250);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMoreServer, setHasMoreServer] = useState(false);
+  const [lastDocCursor, setLastDocCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [deleteTarget, setDeleteTarget] = useState<Patient | null>(null);
+  const [authUid, setAuthUid] = useState<string>(() => auth.currentUser?.uid || '');
 
   useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setAuthUid(u?.uid || ''));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
     const fetchPatients = async () => {
-      try {
-        const querySnapshot = await getDocs(collection(db, 'patients'));
-        const patientsData = querySnapshot.docs.map(doc => ({id: doc.id, ...doc.data()})) as Patient[];
-        setPatients(patientsData);
-      } finally {
+      if (!doctorId || !authUid) {
+        setPatients([]);
+        setLastDocCursor(null);
+        setHasMoreServer(false);
         setLoading(false);
+        return;
+      }
+      setLoading(true);
+      try {
+        const q = isReceptionist
+          ? query(
+              collection(db, 'patients'),
+              where('staffUids', 'array-contains', authUid),
+              limit(SERVER_BATCH_SIZE)
+            )
+          : query(
+              collection(db, 'patients'),
+              where('doctorId', '==', doctorId),
+              limit(SERVER_BATCH_SIZE)
+            );
+        const querySnapshot = await getDocs(q);
+        if (isCancelled) return;
+        const patientsData = (querySnapshot.docs.map(d => ({id: d.id, ...d.data()})) as Patient[])
+          .filter((p) => !isReceptionist || p.doctorId === doctorId);
+        setPatients(patientsData);
+        const lastVisible = querySnapshot.docs[querySnapshot.docs.length - 1] || null;
+        setLastDocCursor(lastVisible);
+        setHasMoreServer(querySnapshot.docs.length === SERVER_BATCH_SIZE);
+        setCurrentPage(1);
+      } catch (err) {
+        console.error('Error loading doctor patients:', err);
+      } finally {
+        if (!isCancelled) setLoading(false);
       }
     };
     fetchPatients();
-  }, [doctorId, refreshKey]);
+    return () => {
+      isCancelled = true;
+    };
+  }, [doctorId, refreshKey, isReceptionist, authUid]);
+
+  const handleLoadMoreServer = async () => {
+    if (!doctorId || !authUid || !lastDocCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const nextQ = isReceptionist
+        ? query(
+            collection(db, 'patients'),
+            where('staffUids', 'array-contains', authUid),
+            startAfter(lastDocCursor),
+            limit(SERVER_BATCH_SIZE)
+          )
+        : query(
+            collection(db, 'patients'),
+            where('doctorId', '==', doctorId),
+            startAfter(lastDocCursor),
+            limit(SERVER_BATCH_SIZE)
+          );
+      const snap = await getDocs(nextQ);
+      const moreData = (snap.docs.map(d => ({id: d.id, ...d.data()})) as Patient[])
+        .filter((p) => !isReceptionist || p.doctorId === doctorId);
+      setPatients(prev => {
+        const existingIds = new Set(prev.map(p => p.id));
+        const uniqueNew = moreData.filter(p => !existingIds.has(p.id));
+        return [...prev, ...uniqueNew];
+      });
+      const lastVisible = snap.docs[snap.docs.length - 1] || null;
+      setLastDocCursor(lastVisible);
+      setHasMoreServer(snap.docs.length === SERVER_BATCH_SIZE);
+    } catch (err) {
+      console.error('Error loading more patients:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const handleConfirmDeletePatient = async () => {
     if (!deleteTarget) return;
@@ -69,36 +156,46 @@ export default function PatientTable({
   };
 
   // Filter patients by Doctor to ensure strict clinical isolation
-  const doctorIsolatedPatients = patients.filter(patient => {
-    if (!doctorId) return true;
-    if (patient.doctorId) {
-      return patient.doctorId === doctorId;
-    }
-    // Backward compatibility for legacy initial patients without doctorId -> doc-1
-    return doctorId === 'doc-1';
-  });
+  const doctorIsolatedPatients = useMemo(
+    () => patients.filter(patient => Boolean(doctorId && patient.doctorId === doctorId)),
+    [patients, doctorId]
+  );
 
-  const filteredPatients = doctorIsolatedPatients.filter(patient => {
-    const matchesSearch = 
-      patient.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (patient.nameEn && patient.nameEn.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      patient.diagnosis?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      patient.phone?.includes(searchTerm);
+  const filteredPatients = useMemo(() => {
+    const q = debouncedSearchTerm.trim().toLowerCase();
+    return doctorIsolatedPatients.filter(patient => {
+      const matchesSearch =
+        !q ||
+        patient.name?.toLowerCase().includes(q) ||
+        (patient.nameEn && patient.nameEn.toLowerCase().includes(q)) ||
+        patient.diagnosis?.toLowerCase().includes(q) ||
+        patient.phone?.includes(debouncedSearchTerm.trim()) ||
+        patient.id?.toLowerCase().includes(q);
 
-    if (!matchesSearch) return false;
+      if (!matchesSearch) return false;
 
-    if (filterStatus === 'alerts') {
-      return patient.status?.includes('تنبيه') || patient.status?.includes('Alert');
-    }
-    if (filterStatus === 'stable') {
-      return patient.status?.includes('مستقر') || patient.status?.includes('Stable');
-    }
-    if (filterStatus === 'heart-failure') {
-      return (patient.ef && patient.ef < 50) || patient.diagnosis?.includes('قصور');
-    }
+      if (filterStatus === 'alerts') {
+        return patient.status?.includes('تنبيه') || patient.status?.includes('Alert');
+      }
+      if (filterStatus === 'stable') {
+        return patient.status?.includes('مستقر') || patient.status?.includes('Stable');
+      }
+      if (filterStatus === 'heart-failure') {
+        return (patient.ef && patient.ef < 50) || patient.diagnosis?.includes('قصور');
+      }
 
-    return true;
-  });
+      return true;
+    });
+  }, [doctorIsolatedPatients, debouncedSearchTerm, filterStatus]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearchTerm, filterStatus, pageSize]);
+
+  const paginatedPatients = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredPatients.slice(start, start + pageSize);
+  }, [filteredPatients, currentPage, pageSize]);
 
   return (
     <div className="bg-white p-5 sm:p-6 rounded-3xl shadow-sm border border-slate-200 mt-6 font-sans" dir={direction}>
@@ -188,7 +285,7 @@ export default function PatientTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filteredPatients.map((patient) => {
+            {paginatedPatients.map((patient) => {
               const isAlert = patient.status?.includes('تنبيه') || patient.status?.includes('Alert');
               const displayName = (language === 'en' && patient.nameEn) ? patient.nameEn : patient.name;
               return (
@@ -248,14 +345,16 @@ export default function PatientTable({
                         <span>{isRTL ? 'الملف السريري' : 'Clinical Profile'}</span>
                         <ChevronRight size={14} className={isRTL ? 'transform -scale-x-100' : ''} />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(patient)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
-                        title={isRTL ? 'حذف ملف المريض' : 'Delete patient'}
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      {!isReceptionist && (
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(patient)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                          title={isRTL ? 'حذف ملف المريض' : 'Delete patient'}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -293,7 +392,7 @@ export default function PatientTable({
 
       {/* Mobile Card View (< md) */}
       <div className="block md:hidden space-y-3">
-        {filteredPatients.map((patient) => {
+        {paginatedPatients.map((patient) => {
           const isAlert = patient.status?.includes('تنبيه') || patient.status?.includes('Alert');
           return (
             <div
@@ -360,14 +459,16 @@ export default function PatientTable({
                   <span>فتح الملف السريري والروشتة</span>
                   <ChevronRight size={15} className="transform -scale-x-100" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setDeleteTarget(patient)}
-                  className="p-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl transition-colors"
-                  title="حذف ملف المريض"
-                >
-                  <Trash2 size={16} />
-                </button>
+                {!isReceptionist && (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(patient)}
+                    className="p-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl transition-colors"
+                    title="حذف ملف المريض"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -396,6 +497,20 @@ export default function PatientTable({
           </div>
         )}
       </div>
+
+      {/* Pagination Controls */}
+      <PaginationControls
+        currentPage={currentPage}
+        totalItems={filteredPatients.length}
+        pageSize={pageSize}
+        onPageChange={setCurrentPage}
+        onPageSizeChange={setPageSize}
+        hasMoreServer={hasMoreServer}
+        loadingMoreServer={loadingMore}
+        onLoadMoreServer={handleLoadMoreServer}
+        itemLabelAr="مريض"
+        itemLabelEn="patients"
+      />
 
       {/* Delete Patient Confirmation Modal */}
       {deleteTarget && (

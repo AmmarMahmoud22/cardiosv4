@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="cardiosBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d9488" />
+      <stop offset="100%" stop-color="#0f766e" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#cardiosBg)" />
+  <path
+    d="M256 416s-138-88-138-184c0-48.6 39.4-88 88-88 28.4 0 53.6 13.5 69.6 34.4C291.6 157.5 316.8 144 345.2 144c48.6 0 88 39.4 88 88 0 96-177.2 184-177.2 184z"
+    fill="rgba(255,255,255,0.16)"
+  />
+  <path
+    d="M256 398s-124-80-124-166c0-41.9 34-76 76-76 24.4 0 46.2 11.6 60 29.6 13.8-18 35.6-29.6 60-29.6 42 0 76 34.1 76 76 0 86-148 166-148 166z"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="24"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <polyline
+    points="146,246 202,246 228,194 264,302 294,226 316,246 366,246"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="22"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

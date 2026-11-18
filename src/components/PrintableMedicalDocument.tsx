@@ -75,12 +75,12 @@ export default function PrintableMedicalDocument({type, data, onClose}: Props) {
   const rxData = isPrescription ? (data as PrescriptionData) : null;
   const echoData = !isPrescription ? (data as CardiologyReportData) : null;
 
-  const doctorName = data.doctorName || 'أ.د. عمار محمود';
-  const doctorSpecialty = data.doctorSpecialty || 'استشاري أمراض القلب والأوعية الدموية والقسطرة التداخلية';
-  const clinicName = data.clinicName || 'مركز CARDIOS التخصصي لأمراض القلب';
-  const clinicPhone = data.clinicPhone || '+20 100 234 5678 / 02 3345 6789';
-  const clinicAddress = isPrescription && rxData?.clinicAddress ? rxData.clinicAddress : 'القاهرة - التجمع الخامس - ميديكال بارك بريميير - الدور الثاني';
-  const licenseNumber = data.licenseNumber || 'ترخيص نقابة الأطباء رقم: 104825 / ج.م.ع';
+  const doctorName = data.doctorName || 'الطبيب المعالج';
+  const doctorSpecialty = data.doctorSpecialty || 'استشاري أمراض القلب والأوعية الدموية';
+  const clinicName = data.clinicName || 'العيادة الطبية';
+  const clinicPhone = data.clinicPhone || '';
+  const clinicAddress = isPrescription && rxData?.clinicAddress ? rxData.clinicAddress : '';
+  const licenseNumber = data.licenseNumber || '';
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-white print:static print:overflow-visible">
@@ -155,7 +155,7 @@ export default function PrintableMedicalDocument({type, data, onClose}: Props) {
                   <h1 className="text-xl sm:text-2xl font-bold text-blue-950 tracking-tight">{clinicName}</h1>
                   <h2 className="text-sm sm:text-base font-semibold text-blue-800 mt-1">{doctorName}</h2>
                   <p className="text-xs text-slate-600 font-medium mt-0.5">{doctorSpecialty}</p>
-                  <p className="text-[11px] text-slate-500 font-mono mt-0.5">{licenseNumber}</p>
+                  {licenseNumber && <p className="text-[11px] text-slate-500 font-mono mt-0.5">{licenseNumber}</p>}
                 </div>
 
                 <div className="text-left flex flex-col items-end">
@@ -163,8 +163,8 @@ export default function PrintableMedicalDocument({type, data, onClose}: Props) {
                     <span className="text-sm font-bold tracking-wider font-mono">CARDIOS</span>
                     <HeartPulse size={26} className="text-red-600 stroke-[2.2]" />
                   </div>
-                  <span className="text-[11px] text-slate-500 font-medium">الخط الساخن: {clinicPhone}</span>
-                  <span className="text-[10px] text-slate-400 max-w-[220px] text-left leading-tight mt-0.5">{clinicAddress}</span>
+                  {clinicPhone && <span className="text-[11px] text-slate-500 font-medium">هاتف العيادة: {clinicPhone}</span>}
+                  {clinicAddress && <span className="text-[10px] text-slate-400 max-w-[220px] text-left leading-tight mt-0.5">{clinicAddress}</span>}
                 </div>
               </div>
 
@@ -180,11 +180,11 @@ export default function PrintableMedicalDocument({type, data, onClose}: Props) {
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px] font-medium">العمر / Age:</span>
-                  <span className="font-semibold text-slate-800 font-mono">{data.patientAge ? `${data.patientAge} سنة` : '54 سنة'}</span>
+                  <span className="font-semibold text-slate-800 font-mono">{data.patientAge ? `${data.patientAge} سنة` : '—'}</span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px] font-medium">رقم الملف / File ID:</span>
-                  <span className="font-bold text-blue-900 font-mono">{data.patientId ? `#PT-${data.patientId}` : '#PT-1042'}</span>
+                  <span className="font-bold text-blue-900 font-mono">{data.patientId ? `#PT-${data.patientId}` : '—'}</span>
                 </div>
 
                 {isPrescription && rxData?.diagnosis && (

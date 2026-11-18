@@ -23,11 +23,16 @@ import {collection, doc, setDoc, addDoc} from 'firebase/firestore';
 import {db} from '../lib/firebase';
 import {generatePatientToken} from '../lib/patientAuth';
 
+import { StaffRole } from '../types/clinic';
+
 interface NewPatientModalProps {
   onClose: () => void;
   onPatientAdded?: (patientId: string) => void;
   doctorId?: string;
+  doctorName?: string;
   clinicCode?: string;
+  staffUids?: string[];
+  staffRole?: StaffRole;
 }
 
 const COMMON_CARDIAC_DIAGNOSES = [
@@ -52,8 +57,11 @@ const COMMON_DRUGS_PRESETS = [
 export default function NewPatientModal({
   onClose,
   onPatientAdded,
-  doctorId = 'doc-1',
-  clinicCode = 'CLINIC-AMMAR-101'
+  doctorId = '',
+  doctorName = '',
+  clinicCode = '',
+  staffUids = [],
+  staffRole = 'doctor'
 }: NewPatientModalProps) {
   const [activeStep, setActiveStep] = useState<'profile' | 'clinical' | 'vitals_meds' | 'success'>('profile');
   const [saving, setSaving] = useState(false);
@@ -63,36 +71,33 @@ export default function NewPatientModal({
   const [name, setName] = useState('');
   const [nameEn, setNameEn] = useState('');
   const [gender, setGender] = useState<'ذكر' | 'أنثى'>('ذكر');
-  const [age, setAge] = useState<number | string>('52');
-  const [dob, setDob] = useState('1974-06-15');
+  const [age, setAge] = useState<number | string>('');
+  const [dob, setDob] = useState('');
   const [phone, setPhone] = useState('');
   const [nationalId, setNationalId] = useState('');
-  const [address, setAddress] = useState('القاهرة');
+  const [address, setAddress] = useState('');
 
   // 2. Clinical History
   const [diagnosis, setDiagnosis] = useState(COMMON_CARDIAC_DIAGNOSES[0]);
   const [customDiagnosis, setCustomDiagnosis] = useState('');
   const [riskTier, setRiskTier] = useState('عالي الخطورة (High CV Risk)');
   const [targetBP, setTargetBP] = useState('< 130/80 mmHg');
-  const [ef, setEf] = useState<number | string>('55');
+  const [ef, setEf] = useState<number | string>('');
   const [allergies, setAllergies] = useState('لا توجد حساسية معروفة');
   const [smoker, setSmoker] = useState('غير مدخن');
 
   // 3. Baseline Vitals
-  const [systolic, setSystolic] = useState('135');
-  const [diastolic, setDiastolic] = useState('85');
-  const [heartRate, setHeartRate] = useState('74');
+  const [systolic, setSystolic] = useState('');
+  const [diastolic, setDiastolic] = useState('');
+  const [heartRate, setHeartRate] = useState('');
 
   // 4. Initial Prescribed Medications
-  const [medications, setMedications] = useState<Array<{name: string; dosage: string; instructions: string; slot: string}>>([
-    {name: 'Bisoprolol (Concor)', dosage: '5 mg', instructions: 'قرص صباحاً بعد الإفطار', slot: 'Morning'},
-    {name: 'Aspirin Protect', dosage: '81 mg', instructions: 'قرص بعد وجبة الغداء', slot: 'Afternoon'}
-  ]);
+  const [medications, setMedications] = useState<Array<{name: string; dosage: string; instructions: string; slot: string}>>([]);
 
   // 5. Initial Labs
-  const [ldl, setLdl] = useState('110 mg/dL');
-  const [creatinine, setCreatinine] = useState('1.0 mg/dL');
-  const [hba1c, setHba1c] = useState('5.9%');
+  const [ldl, setLdl] = useState('');
+  const [creatinine, setCreatinine] = useState('');
+  const [hba1c, setHba1c] = useState('');
 
   // Success State
   const [createdPatientId, setCreatedPatientId] = useState<string>('');
@@ -121,6 +126,10 @@ export default function NewPatientModal({
   };
 
   const handleSavePatient = async () => {
+    if (!doctorId) {
+      setError('يجب تسجيل الدخول بحساب طبيب معتمد لإضافة مريض.');
+      return;
+    }
     if (!name.trim()) {
       setError('يرجى إدخال اسم المريض.');
       setActiveStep('profile');
@@ -136,16 +145,19 @@ export default function NewPatientModal({
       const securityToken = generatePatientToken(newPatientId);
 
       const finalDiagnosis = customDiagnosis.trim() ? customDiagnosis.trim() : diagnosis;
+      const hasLabs = Boolean(ldl.trim() || creatinine.trim() || hba1c.trim());
 
-      const patientDocData = {
+      const patientDocData: Record<string, any> = {
         id: newPatientId,
-        doctorId: doctorId || 'doc-1',
-        clinicCode: clinicCode || 'CLINIC-AMMAR-101',
+        doctorId,
+        doctorName: doctorName || 'الطبيب المعالج',
+        clinicCode,
+        staffUids,
         name: name.trim(),
         nameEn: nameEn.trim() || name.trim(),
         gender,
-        age: Number(age) || 45,
-        dob: dob || '1980-01-01',
+        age: Number(age) || 0,
+        dob: dob || '',
         phone: phone.trim(),
         nationalId: nationalId.trim(),
         address: address.trim(),
@@ -153,28 +165,29 @@ export default function NewPatientModal({
         diagnosis: finalDiagnosis,
         riskTier,
         targetBP,
-        ef: Number(ef) || 55,
+        ef: Number(ef) || 0,
         allergies: allergies.trim(),
         smoker,
         securityToken,
         accessToken: securityToken,
         createdAt: new Date().toISOString(),
-        labs: {
-          ldl: ldl || 'غير مسجل',
-          hdl: '45 mg/dL',
-          creatinine: creatinine || 'غير مسجل',
-          egfr: '85 mL/min',
-          potassium: '4.3 mmol/L',
-          hba1c: hba1c || 'غير مسجل'
-        },
-        initialVitals: [
-          {
-            systolic: Number(systolic) || 120,
-            diastolic: Number(diastolic) || 80,
-            heartRate: Number(heartRate) || 72,
-            timestamp: new Date().toISOString()
+        ...(hasLabs ? {
+          labs: {
+            ldl: ldl.trim() || 'غير مسجل',
+            creatinine: creatinine.trim() || 'غير مسجل',
+            hba1c: hba1c.trim() || 'غير مسجل'
           }
-        ]
+        } : {}),
+        ...(systolic && diastolic ? {
+          initialVitals: [
+            {
+              systolic: Number(systolic),
+              diastolic: Number(diastolic),
+              heartRate: Number(heartRate) || 72,
+              timestamp: new Date().toISOString()
+            }
+          ]
+        } : {})
       };
 
       // 1. Create Patient document
@@ -192,13 +205,13 @@ export default function NewPatientModal({
         });
       }
 
-      // 3. Add initial Prescription subcollection
-      if (medications.length > 0) {
+      // 3. Add initial Prescription subcollection (Doctor only)
+      if (staffRole !== 'receptionist' && medications.length > 0) {
         const validMeds = medications.filter(m => m.name.trim().length > 0);
         if (validMeds.length > 0) {
           await addDoc(collection(db, 'patients', newPatientId, 'prescriptions'), {
             patientId: newPatientId,
-            doctorName: 'طبيب العيادة المعالج',
+            doctorName: doctorName || 'الطبيب المعالج',
             date: new Date().toLocaleDateString('ar-EG'),
             diagnosis: finalDiagnosis,
             medications: validMeds,

@@ -25,8 +25,10 @@ import {
 } from 'lucide-react';
 import {collection, addDoc, query, orderBy, onSnapshot, getDocs, doc, getDoc, where} from 'firebase/firestore';
 import {db} from '../lib/firebase';
-import {verifyPatientAccess, generatePatientToken} from '../lib/patientAuth';
+import {verifyPatientAccess} from '../lib/patientAuth';
 import PatientQRCardModal from './PatientQRCardModal';
+import PatientAttachmentsPanel from './PatientAttachmentsPanel';
+import {PWAInstallButton} from './PWAInstallButton';
 
 interface Props {
   patientId?: string;
@@ -44,38 +46,8 @@ interface MedicationSchedule {
   taken: boolean;
 }
 
-const CLINIC_PHONE = '01146963589';
-const CLINIC_WHATSAPP = '201146963589';
-
-const DEFAULT_MEDS: MedicationSchedule[] = [
-  {
-    id: 'm1',
-    name: 'Bisoprolol (Concor)',
-    dosage: '5 mg',
-    timeSlot: 'Morning',
-    instructions: 'حبة واحدة صباحاً بعد الإفطار مع كوب ماء',
-    taken: true
-  },
-  {
-    id: 'm2',
-    name: 'Aspirin Protect',
-    dosage: '81 mg',
-    timeSlot: 'Afternoon',
-    instructions: 'حبة واحدة بعد وجبة الغداء',
-    taken: false
-  },
-  {
-    id: 'm3',
-    name: 'Atorvastatin (Lipitor)',
-    dosage: '20 mg',
-    timeSlot: 'Evening',
-    instructions: 'حبة واحدة قبل النوم مباشرة',
-    taken: false
-  }
-];
-
 export default function PatientMobileDashboard({
-  patientId: initialPatientId = '1',
+  patientId: initialPatientId = '',
   isPortalMode = false,
   onBack,
   onOpenAuth
@@ -86,7 +58,7 @@ export default function PatientMobileDashboard({
     : isPortalMode;
 
   const [selectedPatientId, setSelectedPatientId] = useState<string>(initialPatientId);
-  const [patientName, setPatientName] = useState<string>('Ahmed Hassan');
+  const [patientName, setPatientName] = useState<string>('');
   const [patientsList, setPatientsList] = useState<{id: string; name: string}[]>([]);
   const [activeTab, setActiveTab] = useState<'vitals' | 'meds' | 'chat' | 'prescriptions' | 'labs'>('vitals');
   const [patientData, setPatientData] = useState<any>(null);
@@ -100,7 +72,7 @@ export default function PatientMobileDashboard({
 
   // Dynamic Custom Doctor Phone / WhatsApp number
   const [customDoctorPhone, setCustomDoctorPhone] = useState<string>(() => {
-    return localStorage.getItem('cardios_custom_doctor_phone') || '01012345678';
+    return localStorage.getItem('cardios_custom_doctor_phone') || '';
   });
 
   useEffect(() => {
@@ -111,7 +83,7 @@ export default function PatientMobileDashboard({
 
   // Real-time listener for patient document (labs, doctor orders, etc.)
   useEffect(() => {
-    if (authStatus !== 'authorized') return;
+    if (authStatus !== 'authorized' || !selectedPatientId) return;
     const unsub = onSnapshot(doc(db, 'patients', selectedPatientId), (snap) => {
       if (snap.exists()) {
         setPatientData(snap.data());
@@ -129,7 +101,7 @@ export default function PatientMobileDashboard({
   const [feedback, setFeedback] = useState<{type: 'success' | 'warning' | 'alert'; message: string} | null>(null);
 
   // Synced Medications from Doctor
-  const [meds, setMeds] = useState<MedicationSchedule[]>(DEFAULT_MEDS);
+  const [meds, setMeds] = useState<MedicationSchedule[]>([]);
   const [showQRModal, setShowQRModal] = useState(false);
 
   // Direct Doctor-Patient Chat State
@@ -145,6 +117,12 @@ export default function PatientMobileDashboard({
       // If doctor is testing inside the clinic dashboard (not portal mode)
       if (!isQRDirectAccess) {
         setAuthStatus('authorized');
+        return;
+      }
+
+      if (!selectedPatientId) {
+        setAuthStatus('unauthorized');
+        setAuthError('يرجى إدخال رقم الملف الطبي ومسح كارت الـ QR الخاص بك.');
         return;
       }
 
@@ -194,7 +172,7 @@ export default function PatientMobileDashboard({
 
   // Load Patient Profile & Details ONLY when authorized
   useEffect(() => {
-    if (authStatus !== 'authorized') return;
+    if (authStatus !== 'authorized' || !selectedPatientId) return;
 
     const fetchPatientData = async () => {
       try {
@@ -202,13 +180,8 @@ export default function PatientMobileDashboard({
         const snap = await getDoc(patientRef);
         if (snap.exists()) {
           setPatientName(snap.data().name || 'Patient ' + selectedPatientId);
-        } else if (!isQRDirectAccess) {
-          // Only in doctor preview mode: check patients collection
-          const colSnap = await getDocs(collection(db, 'patients'));
-          const list = colSnap.docs.map(d => ({id: d.id, name: d.data().name || 'Patient ' + d.id}));
-          setPatientsList(list);
-          const found = list.find(p => p.id === selectedPatientId);
-          if (found) setPatientName(found.name);
+        } else {
+          setPatientsList([]);
         }
       } catch (e) {
         console.warn(e);
@@ -219,7 +192,7 @@ export default function PatientMobileDashboard({
 
   // Real-time Medication Sync ONLY when authorized
   useEffect(() => {
-    if (authStatus !== 'authorized') return;
+    if (authStatus !== 'authorized' || !selectedPatientId) return;
 
     const qPrescriptions = query(
       collection(db, 'patients', selectedPatientId, 'prescriptions'),
@@ -238,7 +211,11 @@ export default function PatientMobileDashboard({
             taken: false
           }));
           setMeds(syncedMeds);
+        } else {
+          setMeds([]);
         }
+      } else {
+        setMeds([]);
       }
     }, (err) => {
       console.warn('Prescriptions listener error:', err);
@@ -248,7 +225,7 @@ export default function PatientMobileDashboard({
 
   // Real-time listener for patient's vitals ONLY when authorized
   useEffect(() => {
-    if (authStatus !== 'authorized') return;
+    if (authStatus !== 'authorized' || !selectedPatientId) return;
 
     const q = query(
       collection(db, 'patients', selectedPatientId, 'vitals'),
@@ -264,7 +241,7 @@ export default function PatientMobileDashboard({
 
   // Real-time listener for Doctor-Patient Chat ONLY when authorized
   useEffect(() => {
-    if (authStatus !== 'authorized') return;
+    if (authStatus !== 'authorized' || !selectedPatientId) return;
 
     // Avoid composite index requirement in Firestore by filtering by patientId and sorting in-memory
     const qChat = query(
@@ -294,6 +271,7 @@ export default function PatientMobileDashboard({
     try {
       await addDoc(collection(db, 'messages'), {
         patientId: selectedPatientId,
+        doctorId: patientData?.doctorId || '',
         patientName,
         sender: 'patient',
         text: newChatText.trim(),
@@ -377,6 +355,8 @@ export default function PatientMobileDashboard({
       if (sys > 140) {
         await addDoc(collection(db, 'vitals'), {
           patientId: selectedPatientId,
+          doctorId: patientData?.doctorId || '',
+          staffUids: Array.isArray(patientData?.staffUids) ? patientData.staffUids : [],
           patientName,
           systolic: sys,
           diastolic: dia,
@@ -489,43 +469,6 @@ export default function PatientMobileDashboard({
                 )}
               </button>
             </form>
-
-            {/* Quick Demo Autofill Helper (strictly restricted to demo patient #1) */}
-            {selectedPatientId === '1' && (
-              <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 space-y-2 mt-2">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="font-medium text-blue-700">رمز الأمان للحساب التجريبي (#1):</span>
-                  <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-blue-300 text-blue-800">
-                    {generatePatientToken(selectedPatientId)}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const token = generatePatientToken(selectedPatientId);
-                    setTokenInput(token);
-                    setVerifyingToken(true);
-                    setAuthError('');
-                    try {
-                      const result = await verifyPatientAccess(selectedPatientId, token);
-                      if (result.valid) {
-                        setAuthStatus('authorized');
-                        if (result.patientName) setPatientName(result.patientName);
-                      } else {
-                        setAuthError(result.reason || 'رمز الأمان غير مطابق.');
-                      }
-                    } finally {
-                      setVerifyingToken(false);
-                    }
-                  }}
-                  disabled={verifyingToken}
-                  className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 text-xs shadow-2xs active:scale-98"
-                >
-                  <CheckCircle2 size={14} />
-                  <span>ملء الرمز تلقائياً والدخول للحساب التجريبي</span>
-                </button>
-              </div>
-            )}
           </div>
         </div>
 
@@ -541,19 +484,24 @@ export default function PatientMobileDashboard({
               <input
                 type="text"
                 value={customDoctorPhone}
-                onChange={(e) => setCustomDoctorPhone(e.target.value)}
+                onChange={(e) => {
+                  setCustomDoctorPhone(e.target.value);
+                  localStorage.setItem('cardios_custom_doctor_phone', e.target.value);
+                }}
                 placeholder="أدخل رقم هاتف/واتساب طبيبك"
                 className="flex-1 px-3 py-1.5 text-xs bg-white border border-gray-300 rounded-lg text-center font-mono font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
               />
-              <a
-                href={`https://wa.me/${customDoctorPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('مرحباً، أود التواصل مع عيادة الطبيب بشأن كارت المتابعة الذكي.')}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-lg inline-flex items-center gap-1 shadow-xs transition-colors shrink-0"
-              >
-                <Send size={13} />
-                <span>واتساب الطبيب</span>
-              </a>
+              {customDoctorPhone.replace(/[^0-9]/g, '') && (
+                <a
+                  href={`https://wa.me/${customDoctorPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('مرحباً، أود التواصل مع عيادة الطبيب بشأن كارت المتابعة الذكي.')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-lg inline-flex items-center gap-1 shadow-xs transition-colors shrink-0"
+                >
+                  <Send size={13} />
+                  <span>واتساب الطبيب</span>
+                </a>
+              )}
             </div>
             <span className="text-[10px] text-gray-400 block">
               (تواصل مباشر مع رقم عيادة الطبيب المعالج المسجل)
@@ -581,16 +529,6 @@ export default function PatientMobileDashboard({
                 <span>العودة للرئيسية</span>
               </button>
             )}
-            <a
-              href={`https://wa.me/201146963589?text=${encodeURIComponent('مرحباً، أود حجز تجربة ديمو للأطباء والمراكز الطبية.')}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 px-3 py-1.5 rounded-lg inline-flex items-center gap-1"
-              title="دعم المنظومة وحجز الديمو للأطباء والمراكز"
-            >
-              <Send size={12} />
-              <span>دعم المنظومة وحجز الديمو (01146963589)</span>
-            </a>
           </div>
         </div>
       </div>
@@ -615,6 +553,7 @@ export default function PatientMobileDashboard({
           </div>
 
           <div className="flex items-center gap-1.5">
+            <PWAInstallButton variant="compact" />
             <button
               onClick={() => setShowQRModal(true)}
               className="p-2 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-white transition-all flex items-center gap-1 text-xs"
@@ -1089,7 +1028,9 @@ export default function PatientMobileDashboard({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Stethoscope size={18} className="text-amber-400" />
-                    <h3 className="font-bold text-xs text-amber-300">توصية وقرار الطبيب المعالج د. إسلام الشريف</h3>
+                    <h3 className="font-bold text-xs text-amber-300">
+                      توصية وقرار الطبيب المعالج {patientData.doctorOrder.doctorName || patientData?.doctorName || ''}
+                    </h3>
                   </div>
                   <span className="text-[10px] bg-amber-400/20 text-amber-200 border border-amber-400/30 px-2 py-0.5 rounded-full font-mono">
                     جديد
@@ -1185,81 +1126,113 @@ export default function PatientMobileDashboard({
                 موعد الفحص الموصى به القادم: <strong>بعد 3 أشهر (فحص الكوليسترول الضار ووظائف الكلى والسكر التراكمي)</strong> لضمان سلامة الشرايين.
               </p>
             </div>
+
+            {/* Read-Only Cardiac ECG / Echo / Imaging Attachments */}
+            <PatientAttachmentsPanel
+              patientId={selectedPatientId}
+              doctorId={patientData?.doctorId || ''}
+              staffUids={patientData?.staffUids || []}
+              readOnly={true}
+            />
           </div>
         )}
 
         {/* TAB 4: PRESCRIPTIONS & CLINIC CONTACT */}
-        {activeTab === 'prescriptions' && (
-          <div className="space-y-3">
-            {/* Active Rx Card */}
-            <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-200 space-y-3">
-              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                <div>
-                  <h3 className="font-bold text-sm text-gray-900">أحدث روشتة علاجية معتمدة</h3>
-                  <p className="text-[11px] text-gray-400">عيادة د. القلب والأوعية الدموية - Cardios</p>
-                </div>
-                <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold">
-                  سارية المفعول
-                </span>
-              </div>
+        {activeTab === 'prescriptions' && (() => {
+          const clinicPhone = (patientData?.doctorPhone || patientData?.clinicPhone || customDoctorPhone || '').trim();
+          const clinicWaDigits = clinicPhone.replace(/[^0-9]/g, '');
+          const clinicWaHref = clinicWaDigits ? (clinicWaDigits.startsWith('0') ? `20${clinicWaDigits.slice(1)}` : clinicWaDigits) : '';
 
-              <div className="space-y-2 text-xs">
-                {meds.map((m, idx) => (
-                  <div key={idx} className="p-2.5 bg-gray-50 rounded-xl border border-gray-200 flex justify-between items-center">
-                    <div>
-                      <span className="font-bold text-gray-900">{idx + 1}. {m.name}</span>
-                      <p className="text-[11px] text-gray-500">{m.instructions}</p>
-                    </div>
-                    <span className="text-blue-700 font-semibold bg-blue-50 px-2 py-0.5 rounded text-[11px]">
-                      {m.dosage}
-                    </span>
+          return (
+            <div className="space-y-3">
+              {/* Active Rx Card */}
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-200 space-y-3">
+                <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                  <div>
+                    <h3 className="font-bold text-sm text-gray-900">أحدث روشتة علاجية معتمدة</h3>
+                    <p className="text-[11px] text-gray-400">
+                      {patientData?.clinicName || 'عيادة أمراض القلب والأوعية الدموية'}
+                    </p>
                   </div>
-                ))}
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+                    {meds.length > 0 ? 'سارية المفعول' : 'بانتظار الصرف'}
+                  </span>
+                </div>
+
+                {meds.length > 0 ? (
+                  <>
+                    <div className="space-y-2 text-xs">
+                      {meds.map((m, idx) => (
+                        <div key={idx} className="p-2.5 bg-gray-50 rounded-xl border border-gray-200 flex justify-between items-center">
+                          <div>
+                            <span className="font-bold text-gray-900">{idx + 1}. {m.name}</span>
+                            <p className="text-[11px] text-gray-500">{m.instructions}</p>
+                          </div>
+                          <span className="text-blue-700 font-semibold bg-blue-50 px-2 py-0.5 rounded text-[11px]">
+                            {m.dosage}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      onClick={() => window.print()}
+                      className="w-full py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition-colors flex items-center justify-center gap-1.5"
+                    >
+                      <FileText size={15} />
+                      <span>تحميل أو طباعة نسخة الروشتة الرسمية</span>
+                    </button>
+                  </>
+                ) : (
+                  <div className="p-6 text-center text-xs text-gray-400">
+                    لم يقم الطبيب بصرف روشتة علاجية لهذا الملف بعد.
+                  </div>
+                )}
               </div>
 
-              <button
-                onClick={() => window.print()}
-                className="w-full py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <FileText size={15} />
-                <span>تحميل أو طباعة نسخة الروشتة الرسمية</span>
-              </button>
+              {/* Direct Clinic WhatsApp / Phone Call */}
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-200 space-y-3">
+                <h3 className="font-bold text-sm text-gray-900">التواصل المباشر مع العيادة</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  في حال وجود أي استفسار عاجل بشأن الجرعات أو الشعور بأي أعراض غير معتادة:
+                </p>
+
+                {clinicPhone ? (
+                  <>
+                    <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-200 flex items-center justify-between text-xs font-semibold text-blue-900">
+                      <span>رقم العيادة المباشر:</span>
+                      <span className="font-mono text-sm tracking-wider font-bold text-blue-800">{clinicPhone}</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <a
+                        href={`https://wa.me/${clinicWaHref}?text=${encodeURIComponent(`مرحباً ${patientData?.clinicName || 'عيادة القلب'}، أنا المريض ${patientName} (ملف #${selectedPatientId}). أود الاستفسار عن حالتي.`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs text-center"
+                      >
+                        <Send size={15} />
+                        <span>واتساب العيادة</span>
+                      </a>
+
+                      <a
+                        href={`tel:${clinicPhone}`}
+                        className="p-3 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all border border-gray-200 text-center"
+                      >
+                        <Phone size={15} />
+                        <span>اتصال هاتفي</span>
+                      </a>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-slate-500 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    يمكنك التواصل مع طبيبك المعالج مباشرة عبر تبويب &quot;المحادثة&quot; بالأعلى.
+                  </p>
+                )}
+              </div>
             </div>
-
-            {/* Direct Clinic WhatsApp / Phone Call using exact number 01146963589 */}
-            <div className="bg-white p-5 rounded-3xl shadow-sm border border-gray-200 space-y-3">
-              <h3 className="font-bold text-sm text-gray-900">التواصل المباشر مع العيادة</h3>
-              <p className="text-xs text-gray-500 leading-relaxed">
-                في حال وجود أي استفسار عاجل بشأن الجرعات أو الشعور بأي أعراض غير معتادة:
-              </p>
-
-              <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-200 flex items-center justify-between text-xs font-semibold text-blue-900">
-                <span>رقم العيادة المباشر:</span>
-                <span className="font-mono text-sm tracking-wider font-bold text-blue-800">{CLINIC_PHONE}</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <a
-                  href={`https://wa.me/${CLINIC_WHATSAPP}?text=${encodeURIComponent(`مرحباً عيادة د. القلب (Cardios)، أنا المريض ${patientName} (ملف #${selectedPatientId}). أود الاستفسار عن حالتي.`)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all shadow-xs text-center"
-                >
-                  <Send size={15} />
-                  <span>واتساب العيادة</span>
-                </a>
-
-                <a
-                  href={`tel:${CLINIC_PHONE}`}
-                  className="p-3 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl font-bold flex items-center justify-center gap-1.5 transition-all border border-gray-200 text-center"
-                >
-                  <Phone size={15} />
-                  <span>اتصال هاتفي</span>
-                </a>
-              </div>
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* QR Access Card Modal */}
@@ -1267,6 +1240,9 @@ export default function PatientMobileDashboard({
         <PatientQRCardModal
           patientName={patientName}
           patientId={selectedPatientId}
+          doctorName={patientData?.doctorName}
+          clinicName={patientData?.clinicName}
+          clinicPhone={patientData?.doctorPhone || patientData?.clinicPhone}
           onClose={() => setShowQRModal(false)}
         />
       )}

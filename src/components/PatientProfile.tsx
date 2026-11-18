@@ -32,9 +32,9 @@ import ReferralModal from './ReferralModal';
 import BillingModal from './BillingModal';
 import PatientQRCardModal from './PatientQRCardModal';
 import ClinicalCalculatorsModal from './ClinicalCalculatorsModal';
+import PatientAttachmentsPanel from './PatientAttachmentsPanel';
 import { useLanguage, LanguageSwitcher } from '../context/LanguageContext';
-
-const CLINIC_HOTLINE = '01146963589';
+import { StaffRole } from '../types/clinic';
 
 const COMMON_CARDIOLOGY_MEDS = [
   {name: 'Bisoprolol (Concor)', dose: '5 mg', timing: 'صباحاً بعد الإفطار'},
@@ -54,14 +54,31 @@ export default function PatientProfile({
   patientId,
   onBack,
   isAiBlocked = false,
-  aiBlockedReason
+  aiBlockedReason,
+  doctorId = '',
+  doctorName = '',
+  clinicName = '',
+  clinicPhone = '',
+  specialty = '',
+  staffRole = 'doctor',
+  staffName = '',
+  staffUids = []
 }: {
   patientId: string;
   onBack: () => void;
   isAiBlocked?: boolean;
   aiBlockedReason?: string;
+  doctorId?: string;
+  doctorName?: string;
+  clinicName?: string;
+  clinicPhone?: string;
+  specialty?: string;
+  staffRole?: StaffRole;
+  staffName?: string;
+  staffUids?: string[];
 }) {
   const { language, direction, isRTL, t } = useLanguage();
+  const isReceptionist = staffRole === 'receptionist';
   const [patient, setPatient] = useState<any>(null);
   const [medications, setMedications] = useState<{name: string, dosage: string, instructions?: string}[]>([]);
   const [vitals, setVitals] = useState<{timestamp: string, systolic: number, diastolic: number, heartRate?: number}[]>([]);
@@ -219,9 +236,11 @@ export default function PatientProfile({
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-1 flex items-center gap-3">
-                <span>{isRTL ? `تاريخ الميلاد: ${patient.dob} (${patient.age || 50} سنة)` : `DOB: ${patient.dob} (${patient.age || 50} yo)`}</span>
-                <span>• {t('phone')}: {patient.phone || '01012345678'}</span>
-                <span>• {isRTL ? 'خط العيادة:' : 'Clinic Hotline:'} <strong className="text-blue-600 font-mono">{CLINIC_HOTLINE}</strong></span>
+                <span>{isRTL ? `تاريخ الميلاد: ${patient.dob || '—'} (${patient.age || '—'} سنة)` : `DOB: ${patient.dob || '—'} (${patient.age || '—'} yo)`}</span>
+                <span>• {t('phone')}: {patient.phone || 'غير مسجل'}</span>
+                {(clinicPhone || patient.doctorPhone || patient.clinicPhone) && (
+                  <span>• {isRTL ? 'خط العيادة:' : 'Clinic Hotline:'} <strong className="text-blue-600 font-mono">{clinicPhone || patient.doctorPhone || patient.clinicPhone}</strong></span>
+                )}
               </p>
             </div>
           </div>
@@ -230,32 +249,34 @@ export default function PatientProfile({
           <div className="flex flex-wrap items-center gap-2.5">
             <LanguageSwitcher />
 
-            {/* AI Assistant Direct Trigger */}
-            <button
-              onClick={() => setAiTrigger(prev => prev + 1)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl shadow-sm text-xs font-bold transition-all active:scale-95 cursor-pointer ${
-                isAiBlocked
-                  ? 'bg-red-900/80 hover:bg-red-900 text-red-200 border border-red-500/50'
-                  : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-700 hover:from-emerald-700 hover:to-blue-800 text-white'
-              }`}
-            >
-              <Sparkles size={16} className={isAiBlocked ? 'text-red-300' : 'text-amber-300 animate-pulse'} />
-              <span>{isAiBlocked ? (isRTL ? 'مستشار الذكاء الاصطناعي (مغلق إدارياً)' : 'Cardio AI (Blocked)') : (isRTL ? 'مستشار الذكاء الاصطناعي للحالة (Cardio AI)' : 'Cardio AI Case Assistant')}</span>
-            </button>
+            {!isReceptionist && (
+              <>
+                <button
+                  onClick={() => setAiTrigger(prev => prev + 1)}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl shadow-sm text-xs font-bold transition-all active:scale-95 cursor-pointer ${
+                    isAiBlocked
+                      ? 'bg-red-900/80 hover:bg-red-900 text-red-200 border border-red-500/50'
+                      : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-700 hover:from-emerald-700 hover:to-blue-800 text-white'
+                  }`}
+                >
+                  <Sparkles size={16} className={isAiBlocked ? 'text-red-300' : 'text-amber-300 animate-pulse'} />
+                  <span>{isAiBlocked ? (isRTL ? 'مستشار الذكاء الاصطناعي (مغلق إدارياً)' : 'Cardio AI (Blocked)') : (isRTL ? 'مستشار الذكاء الاصطناعي للحالة (Cardio AI)' : 'Cardio AI Case Assistant')}</span>
+                </button>
 
-            {/* Clinical Calculators Button */}
-            <button
-              onClick={() => setShowCalcModal(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-2xl shadow-xs text-xs font-bold transition-all active:scale-95 cursor-pointer"
-            >
-              <Calculator size={16} className="text-blue-600" />
-              <span>{t('clinicalCalculators')}</span>
-            </button>
+                <button
+                  onClick={() => setShowCalcModal(true)}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 rounded-2xl shadow-xs text-xs font-bold transition-all active:scale-95 cursor-pointer"
+                >
+                  <Calculator size={16} className="text-blue-600" />
+                  <span>{t('clinicalCalculators')}</span>
+                </button>
+              </>
+            )}
 
             {/* Smart QR Card */}
             <button
               onClick={() => setShowQRCard(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white rounded-2xl shadow-sm text-xs font-bold transition-all active:scale-95"
+              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white rounded-2xl shadow-sm text-xs font-bold transition-all active:scale-95 cursor-pointer"
             >
               <QrCode size={16} />
               <span>كارت المريض الذكي (QR Portal)</span>
@@ -479,7 +500,7 @@ export default function PatientProfile({
           </div>
         </div>
 
-        {/* Smart Prescription & Medication Sync */}
+        {/* Smart Prescription & Medication Sync (Doctor full access; Receptionist view-only) */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 lg:col-span-3">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div>
@@ -488,29 +509,33 @@ export default function PatientProfile({
                 <span>الروشتة العلاجية الذكية والمزامنة الفورية (Smart Prescription)</span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                تزامن الروشتة تلقائياً وتظهر في تطبيق هاتف المريض عند مسح رمز QR
+                {isReceptionist
+                  ? 'عرض وطباعة الروشتة المعتمدة من الطبيب فقط (التعديل متاح للطبيب المعالج)'
+                  : 'تزامن الروشتة تلقائياً وتظهر في تطبيق هاتف المريض عند مسح رمز QR'}
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  if (isAiBlocked) return;
-                  setAiTrigger(prev => prev + 1);
-                }}
-                disabled={isAiBlocked}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
-                  isAiBlocked
-                    ? 'bg-red-50 text-red-700 border-red-200 cursor-not-allowed opacity-75'
-                    : 'bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200'
-                }`}
-                title={isAiBlocked ? 'الذكاء الاصطناعي موقوف إدارياً' : 'فحص التعارضات بالذكاء الاصطناعي'}
-              >
-                {isAiBlocked ? <Lock size={14} className="text-red-500" /> : <Sparkles size={14} className="text-purple-600" />}
-                <span>{isAiBlocked ? 'فحص التعارضات (الـ AI موقف إدارياً)' : 'فحص التعارضات بالذكاء الاصطناعي'}</span>
-              </button>
+              {!isReceptionist && (
+                <button
+                  onClick={() => {
+                    if (isAiBlocked) return;
+                    setAiTrigger(prev => prev + 1);
+                  }}
+                  disabled={isAiBlocked}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
+                    isAiBlocked
+                      ? 'bg-red-50 text-red-700 border-red-200 cursor-not-allowed opacity-75'
+                      : 'bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200'
+                  }`}
+                  title={isAiBlocked ? 'الذكاء الاصطناعي موقوف إدارياً' : 'فحص التعارضات بالذكاء الاصطناعي'}
+                >
+                  {isAiBlocked ? <Lock size={14} className="text-red-500" /> : <Sparkles size={14} className="text-purple-600" />}
+                  <span>{isAiBlocked ? 'فحص التعارضات (الـ AI موقف إدارياً)' : 'فحص التعارضات بالذكاء الاصطناعي'}</span>
+                </button>
+              )}
               <button
                 onClick={() => window.print()}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
               >
                 <Printer size={14} />
                 <span>طباعة الروشتة (PDF)</span>
@@ -518,7 +543,6 @@ export default function PatientProfile({
             </div>
           </div>
 
-          {/* Printable Prescription Box */}
           <div id="prescription-content" className="p-5 bg-slate-50 border border-slate-200 rounded-2xl mb-4 print:border-0 print:bg-white">
             <div className="border-b border-slate-200 pb-3 mb-3 flex items-center justify-between">
               <div>
@@ -528,7 +552,9 @@ export default function PatientProfile({
                 <p className="text-xs text-slate-500">اسم المريض: {patient.name} | التاريخ: {new Date().toLocaleDateString('ar-EG')}</p>
               </div>
               <div className="text-left text-xs text-slate-500 font-mono">
-                <div>خط العيادة: {CLINIC_HOTLINE}</div>
+                {(clinicPhone || patient.doctorPhone || patient.clinicPhone) && (
+                  <div>خط العيادة: {clinicPhone || patient.doctorPhone || patient.clinicPhone}</div>
+                )}
                 <div className="text-[11px] text-emerald-600 font-semibold">مفعلة بالمزامنة السحابية</div>
               </div>
             </div>
@@ -543,178 +569,220 @@ export default function PatientProfile({
                     <div>
                       <strong className="font-bold text-slate-900 text-sm">{m.name}</strong>
                       <span className="text-blue-700 font-mono font-bold mr-2">[{m.dosage}]</span>
-                      {m.instructions && (
-                        <p className="text-slate-500 mt-0.5">{m.instructions}</p>
-                      )}
+                      {m.instructions && <p className="text-slate-500 mt-0.5">{m.instructions}</p>}
                     </div>
                   </div>
-                  <button
-                    onClick={() => removeMedication(i)}
-                    className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg transition-colors print:hidden"
-                    title="حذف الدواء"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  {!isReceptionist && (
+                    <button
+                      onClick={() => removeMedication(i)}
+                      className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg transition-colors print:hidden cursor-pointer"
+                      title="حذف الدواء"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
               ))}
               {medications.length === 0 && (
                 <p className="italic text-slate-400 text-xs text-center py-4">
-                  لم يتم إضافة أدوية حتى الآن... يمكنك الاختيار من قائمة أدوية القلب أدناه
+                  لم يتم إضافة أدوية حتى الآن.
                 </p>
               )}
             </div>
           </div>
 
-          {/* Quick preset pill buttons */}
-          <div className="mb-4">
-            <span className="text-[11px] font-bold text-slate-500 block mb-2">
-              إضافة سريعة لأشهر أدوية القلب وضغط الدم في مصر:
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {COMMON_CARDIOLOGY_MEDS.map((med, idx) => (
+          {!isReceptionist && (
+            <>
+              <div className="mb-4">
+                <span className="text-[11px] font-bold text-slate-500 block mb-2">
+                  إضافة سريعة لأشهر أدوية القلب وضغط الدم في مصر:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {COMMON_CARDIOLOGY_MEDS.map((med, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => selectPresetMed(med)}
+                      className="px-2.5 py-1 bg-white hover:bg-blue-50 hover:border-blue-300 border border-slate-200 rounded-xl text-[11px] text-slate-700 font-medium transition-all cursor-pointer"
+                    >
+                      + {med.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-slate-100/80 p-4 rounded-2xl mb-4 border border-slate-200">
+                <h4 className="text-xs font-bold text-slate-700 mb-2">إضافة دواء مخصص للروشتة:</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                  <input
+                    type="text"
+                    value={medName}
+                    onChange={(e) => setMedName(e.target.value)}
+                    placeholder="اسم الدواء (مثال: Bisoprolol / Concor)"
+                    className="sm:col-span-5 p-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  />
+                  <input
+                    type="text"
+                    value={medDosage}
+                    onChange={(e) => setMedDosage(e.target.value)}
+                    placeholder="الجرعة (مثال: 5 mg)"
+                    className="sm:col-span-3 p-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  />
+                  <input
+                    type="text"
+                    value={medInstructions}
+                    onChange={(e) => setMedInstructions(e.target.value)}
+                    placeholder="تعليمات التناول (مثال: قرص صباحاً)"
+                    className="sm:col-span-3 p-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={addMedication}
+                    className="sm:col-span-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center cursor-pointer"
+                    title="إضافة للقائمة"
+                  >
+                    <Plus size={18} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
                 <button
-                  key={idx}
-                  onClick={() => selectPresetMed(med)}
-                  className="px-2.5 py-1 bg-white hover:bg-blue-50 hover:border-blue-300 border border-slate-200 rounded-xl text-[11px] text-slate-700 font-medium transition-all"
+                  onClick={savePrescription}
+                  disabled={savingRx || medications.length === 0}
+                  className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 disabled:opacity-40 text-white font-bold text-xs rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer"
                 >
-                  + {med.name}
+                  <ShieldCheck size={16} />
+                  <span>{savingRx ? 'جاري المزامنة...' : 'حفظ الروشتة ومزامنتها فوراً مع هاتف المريض'}</span>
                 </button>
-              ))}
-            </div>
-          </div>
 
-          {/* Add Medication Inputs */}
-          <div className="bg-slate-100/80 p-4 rounded-2xl mb-4 border border-slate-200">
-            <h4 className="text-xs font-bold text-slate-700 mb-2">إضافة دواء مخصص للروشتة:</h4>
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-              <input
-                type="text"
-                value={medName}
-                onChange={(e) => setMedName(e.target.value)}
-                placeholder="اسم الدواء (مثال: Bisoprolol / Concor)"
-                className="sm:col-span-5 p-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500"
-              />
-              <input
-                type="text"
-                value={medDosage}
-                onChange={(e) => setMedDosage(e.target.value)}
-                placeholder="الجرعة (مثال: 5 mg)"
-                className="sm:col-span-3 p-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500"
-              />
-              <input
-                type="text"
-                value={medInstructions}
-                onChange={(e) => setMedInstructions(e.target.value)}
-                placeholder="تعليمات التناول (مثال: قرص صباحاً)"
-                className="sm:col-span-3 p-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                onClick={addMedication}
-                className="sm:col-span-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center"
-                title="إضافة للقائمة"
-              >
-                <Plus size={18} />
-              </button>
-            </div>
-          </div>
+                {rxSyncSuccess && (
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-bold bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-200">
+                    <Check size={14} />
+                    <span>تمت المزامنة بنجاح! ستظهر الروشتة للمريض عند مسح الكود.</span>
+                  </div>
+                )}
 
-          {/* Sync & Save Action */}
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
-            <button
-              onClick={savePrescription}
-              disabled={savingRx || medications.length === 0}
-              className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-700 hover:from-blue-700 hover:to-indigo-800 disabled:opacity-40 text-white font-bold text-xs rounded-xl shadow-sm transition-all active:scale-95"
-            >
-              <ShieldCheck size={16} />
-              <span>{savingRx ? 'جاري المزامنة...' : 'حفظ الروشتة ومزامنتها فوراً مع هاتف المريض'}</span>
-            </button>
+                {rxError && (
+                  <div className="flex items-center gap-1.5 text-xs text-rose-700 font-bold bg-rose-100 px-3 py-1.5 rounded-xl border border-rose-200">
+                    <AlertTriangle size={14} />
+                    <span>{rxError}</span>
+                  </div>
+                )}
 
-            {rxSyncSuccess && (
-              <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-bold bg-emerald-100 px-3 py-1.5 rounded-xl border border-emerald-200">
-                <Check size={14} />
-                <span>تمت المزامنة بنجاح! ستظهر الروشتة للمريض عند مسح الكود.</span>
+                <button
+                  onClick={() => setShowLabModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition-all shadow-2xs hover:border-blue-300 active:scale-95 cursor-pointer"
+                >
+                  <FileSpreadsheet size={15} className="text-blue-600" />
+                  <span>مراجعة التحاليل والدهون المرتبطة بالعلاج</span>
+                  <span className="text-xs">&larr;</span>
+                </button>
               </div>
-            )}
-
-            {rxError && (
-              <div className="flex items-center gap-1.5 text-xs text-rose-700 font-bold bg-rose-100 px-3 py-1.5 rounded-xl border border-rose-200">
-                <AlertTriangle size={14} />
-                <span>{rxError}</span>
-              </div>
-            )}
-
-            <button
-              onClick={() => setShowLabModal(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition-all shadow-2xs hover:border-blue-300 active:scale-95"
-            >
-              <FileSpreadsheet size={15} className="text-blue-600" />
-              <span>مراجعة التحاليل والدهون المرتبطة بالعلاج</span>
-              <span className="text-xs">&larr;</span>
-            </button>
-          </div>
+            </>
+          )}
         </div>
 
-        {/* Diagnostic Cardiology Report (Echo & ECG) */}
+        {/* ECG & Cardiac Imaging Attachments (Available for Doctor & Nurse/Receptionist) */}
         <div className="lg:col-span-3">
-          <CardiologyReport patientName={patient.name} patientId={patient.id || patientId} />
+          <PatientAttachmentsPanel
+            patientId={patientId}
+            doctorId={doctorId || patient.doctorId || ''}
+            staffUids={staffUids.length > 0 ? staffUids : patient.staffUids || []}
+            staffRole={staffRole}
+            staffName={staffName || doctorName || 'طاقم العيادة'}
+          />
         </div>
+
+        {/* Diagnostic Cardiology Report (Echo & ECG) — Doctor Only */}
+        {!isReceptionist && (
+          <div className="lg:col-span-3">
+            <CardiologyReport
+              patientName={patient.name}
+              patientId={patient.id || patientId}
+              doctorName={doctorName || patient.doctorName || ''}
+              clinicName={clinicName || patient.clinicName || ''}
+              specialty={specialty || patient.specialty || ''}
+            />
+          </div>
+        )}
 
         {/* Direct Doctor-Patient Clinic Chat */}
         <div className="lg:col-span-3">
-          <Chat patientId={patientId} patientName={patient.name} />
+          <Chat
+            patientId={patientId}
+            patientName={patient.name}
+            doctorId={doctorId || patient.doctorId || ''}
+          />
         </div>
 
         {/* Administrative Quick Actions */}
         <div className="lg:col-span-3 flex flex-wrap gap-2.5 pt-2">
-          <button
-            onClick={() => setShowReferralModal(true)}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
-          >
-            تحويل لمستشفى / قسطرة (Referral)
-          </button>
+          {!isReceptionist && (
+            <button
+              onClick={() => setShowReferralModal(true)}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+            >
+              تحويل لمستشفى / قسطرة (Referral)
+            </button>
+          )}
           <button
             onClick={() => setShowBillingModal(true)}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
           >
             فاتورة كشف واستشارة (Invoice)
           </button>
         </div>
       </div>
 
-      {/* Floating AI Assistant with Full Patient Clinical Context */}
-      <GeminiChat
-        patientContext={{
-          id: patientId,
-          name: patient.name,
-          nameEn: patient.nameEn,
-          dob: patient.dob,
-          age: patient.age,
-          gender: patient.gender,
-          status: patient.status,
-          diagnosis: patient.diagnosis,
-          riskTier: patient.riskTier,
-          ef: patient.ef,
-          vitals: vitals,
-          medications: medications,
-          labs: patient.labs,
-          echo: patient.echo
-        }}
-        externalOpenTrigger={aiTrigger}
-        isAiBlocked={isAiBlocked}
-        aiBlockedReason={aiBlockedReason}
-      />
+      {/* Floating AI Assistant with Full Patient Clinical Context (Doctor Only) */}
+      {!isReceptionist && (
+        <GeminiChat
+          patientContext={{
+            id: patientId,
+            name: patient.name,
+            nameEn: patient.nameEn,
+            dob: patient.dob,
+            age: patient.age,
+            gender: patient.gender,
+            status: patient.status,
+            diagnosis: patient.diagnosis,
+            riskTier: patient.riskTier,
+            ef: patient.ef,
+            vitals: vitals,
+            medications: medications,
+            labs: patient.labs,
+            echo: patient.echo
+          }}
+          externalOpenTrigger={aiTrigger}
+          isAiBlocked={isAiBlocked}
+          aiBlockedReason={aiBlockedReason}
+        />
+      )}
 
-      {showReferralModal && <ReferralModal patientId={patientId} onClose={() => setShowReferralModal(false)} />}
-      {showBillingModal && <BillingModal patientId={patientId} onClose={() => setShowBillingModal(false)} />}
+      {showReferralModal && !isReceptionist && <ReferralModal patientId={patientId} onClose={() => setShowReferralModal(false)} />}
+      {showBillingModal && (
+        <BillingModal
+          patientId={patientId}
+          patientName={patient.name}
+          patientPhone={patient.phone}
+          doctorId={doctorId || patient.doctorId || ''}
+          staffUids={staffUids.length > 0 ? staffUids : patient.staffUids || []}
+          staffRole={staffRole}
+          staffName={staffName || doctorName || 'طاقم العيادة'}
+          onClose={() => setShowBillingModal(false)}
+        />
+      )}
       {showQRCard && (
         <PatientQRCardModal
           patientName={patient.name}
           patientId={patient.id || patientId}
+          doctorName={doctorName || patient.doctorName || ''}
+          clinicName={clinicName || patient.clinicName || ''}
+          clinicPhone={clinicPhone || patient.doctorPhone || patient.clinicPhone || ''}
           onClose={() => setShowQRCard(false)}
         />
       )}
 
-      {showCalcModal && (
+      {showCalcModal && !isReceptionist && (
         <ClinicalCalculatorsModal
           patientName={patient.name}
           patientAge={patient.age || 52}

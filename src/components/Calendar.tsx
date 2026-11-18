@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, updateDoc, deleteDoc, doc } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { collection, query, where, onSnapshot, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
+import { db, auth } from '../lib/firebase';
 import { Appointment } from '../types/appointment';
+import { StaffRole } from '../types/clinic';
 import { format, addDays, startOfWeek } from 'date-fns';
 import { Share2, Calendar as CalendarIcon, Plus, Settings, Printer, Trash2 } from 'lucide-react';
 import AppointmentBookingModal from './AppointmentBookingModal';
@@ -9,16 +11,19 @@ import ClinicScheduleModal from './ClinicScheduleModal';
 import ClinicBookingPosterModal from './ClinicBookingPosterModal';
 
 export default function CalendarView({
-  doctorId = 'doc-1',
-  doctorName = 'د/ عمار محمود',
-  clinicCode = 'CLINIC-AMMAR-101',
-  isDemoSession = true
+  doctorId = '',
+  doctorName = '',
+  clinicCode = '',
+  staffUids = [],
+  staffRole = 'doctor'
 }: {
   doctorId?: string;
   doctorName?: string;
   clinicCode?: string;
-  isDemoSession?: boolean;
+  staffUids?: string[];
+  staffRole?: StaffRole;
 }) {
+  const [authUid, setAuthUid] = useState<string>(() => auth.currentUser?.uid || '');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
@@ -27,16 +32,29 @@ export default function CalendarView({
   const startDate = startOfWeek(new Date(), { weekStartsOn: 6 }); // Saturday start for Arabic calendar
 
   useEffect(() => {
-    const q = query(collection(db, 'appointments'));
+    const unsub = onAuthStateChanged(auth, (u) => setAuthUid(u?.uid || ''));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if ((!doctorId && !clinicCode) || !authUid) {
+      setAppointments([]);
+      return;
+    }
+    const isRec = staffRole === 'receptionist';
+    const q = isRec
+      ? query(collection(db, 'appointments'), where('staffUids', 'array-contains', authUid))
+      : doctorId
+        ? query(collection(db, 'appointments'), where('doctorId', '==', doctorId))
+        : query(collection(db, 'appointments'), where('clinicCode', '==', clinicCode));
     return onSnapshot(q, (snapshot) => {
-      const allApps = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as (Appointment & { doctorId?: string })[];
-      if (!isDemoSession && doctorId) {
-        setAppointments(allApps.filter(a => a.doctorId === doctorId));
-      } else {
-        setAppointments(allApps);
-      }
+      const allApps = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() })) as (Appointment & { doctorId?: string; clinicCode?: string })[];
+      setAppointments(
+        isRec && doctorId ? allApps.filter((a) => a.doctorId === doctorId) : allApps
+      );
     });
-  }, [doctorId, isDemoSession]);
+  }, [doctorId, clinicCode, staffRole, authUid]);
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
@@ -96,6 +114,9 @@ export default function CalendarView({
         <AppointmentBookingModal
           onClose={() => setShowModal(false)}
           doctorId={doctorId}
+          clinicCode={clinicCode}
+          staffUids={staffUids}
+          staffRole={staffRole}
         />
       )}
 
@@ -113,6 +134,7 @@ export default function CalendarView({
         <ClinicBookingPosterModal
           isOpen={showPosterModal}
           onClose={() => setShowPosterModal(false)}
+          doctorId={doctorId}
           doctorName={doctorName}
           clinicCode={clinicCode}
         />
