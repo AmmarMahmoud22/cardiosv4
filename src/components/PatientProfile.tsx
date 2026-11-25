@@ -89,6 +89,7 @@ export default function PatientProfile({
   const [savingRx, setSavingRx] = useState(false);
   const [rxSyncSuccess, setRxSyncSuccess] = useState(false);
   const [rxError, setRxError] = useState('');
+  const [diagText, setDiagText] = useState('');
 
   // New med inputs
   const [medName, setMedName] = useState('');
@@ -667,6 +668,17 @@ export default function PatientProfile({
                     <AlertTriangle size={14} />
                     <span>{rxError}</span>
                   </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={async () => { setDiagText('جاري الفحص...'); setDiagText(await describeWriteError({ code: 'فحص بدون حفظ' }, patientId)); }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 cursor-pointer"
+                >
+                  <span>فحص الصلاحيات (قراءة فقط، بدون حفظ)</span>
+                </button>
+                {diagText && (
+                  <div className="text-xs text-slate-700 font-bold bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200 break-all" dir="rtl">{diagText}</div>
                 )}
 
                 <button
