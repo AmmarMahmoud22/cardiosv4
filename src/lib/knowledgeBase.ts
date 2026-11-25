@@ -18,6 +18,7 @@ import {
   KnowledgeSettings,
   RetrievedChunk
 } from '../types/knowledge';
+import { authedFetch } from './apiClient';
 
 const SOURCES_COLLECTION = 'ai_knowledge_sources';
 const CHUNKS_COLLECTION = 'ai_knowledge_chunks';
@@ -47,7 +48,7 @@ export interface IngestionProgress {
 export async function fetchEmbeddings(texts: string[]): Promise<number[][] | null> {
   if (!texts.length) return [];
   try {
-    const res = await fetch('/api/ai/embed', {
+    const res = await authedFetch('/api/ai/embed', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ texts })

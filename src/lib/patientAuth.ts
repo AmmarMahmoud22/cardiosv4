@@ -1,167 +1,110 @@
 import {doc, getDoc} from 'firebase/firestore';
-import {db} from './firebase';
-
-const CLINIC_SALT = 'cardios_secure_qr_2026_salt';
-
-/**
- * Generates a reproducible, non-guessable security token for a given patient ID.
- */
-export function generatePatientToken(patientId: string, _legacyDob?: string): string {
-  const seed = `${patientId}_c_${CLINIC_SALT}`;
-  let hash1 = 5381;
-  let hash2 = 0;
-  for (let i = 0; i < seed.length; i++) {
-    const char = seed.charCodeAt(i);
-    hash1 = ((hash1 << 5) + hash1) + char;
-    hash2 = ((hash2 << 7) - hash2) + char;
-  }
-  const part1 = Math.abs(hash1).toString(36).slice(0, 5);
-  const part2 = Math.abs(hash2).toString(36).slice(0, 5);
-  return `cp_${part1}${part2}`;
-}
-
-/**
- * Secondary helper for backwards compatibility with any tokens generated using dob
- */
-function generateTokenWithDob(patientId: string, dob?: string): string {
-  if (!dob) return generatePatientToken(patientId);
-  const seed = `${patientId}_${dob}_${CLINIC_SALT}`;
-  let hash1 = 5381;
-  let hash2 = 0;
-  for (let i = 0; i < seed.length; i++) {
-    const char = seed.charCodeAt(i);
-    hash1 = ((hash1 << 5) + hash1) + char;
-    hash2 = ((hash2 << 7) - hash2) + char;
-  }
-  const part1 = Math.abs(hash1).toString(36).slice(0, 5);
-  const part2 = Math.abs(hash2).toString(36).slice(0, 5);
-  return `cp_${part1}${part2}`;
-}
+import {signInWithCustomToken} from 'firebase/auth';
+import {auth, db} from './firebase';
 
 const SESSION_STORAGE_KEY = 'cardios_patient_session';
 const DOCTOR_SESSION_KEY = 'cardios_doctor_authenticated';
 
+/**
+ * Creates a random, unguessable card token (128 bits). It is stored on the
+ * patient record and checked by the server. Nothing is derived from the patient id.
+ */
+export function generatePatientToken(_patientId?: string): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return 'cp_' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** A card token issued by this version is at least 20 characters long. */
+export function isStrongPatientToken(token: unknown): token is string {
+  return typeof token === 'string' && token.length >= 20;
+}
+
 export interface PatientAuthSession {
   patientId: string;
-  token: string;
   patientName: string;
   verifiedAt: number;
 }
 
+export interface PatientAccessResult {
+  valid: boolean;
+  reason?: string;
+  patientName?: string;
+}
+
+async function currentPatientClaim(): Promise<string | null> {
+  const user = auth.currentUser;
+  if (!user) return null;
+  try {
+    const res = await user.getIdTokenResult();
+    return res.claims.role === 'patient' ? String(res.claims.patientId || '') : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Verifies if the current patient session or token from URL is valid.
+ * Opens a patient session. The card token is checked on the server, which
+ * returns a sign-in token limited to this one patient. Firestore rules then
+ * allow that session to read only this patient's own records.
  */
 export async function verifyPatientAccess(
   patientId: string,
   tokenFromUrl?: string | null
-): Promise<{
-  valid: boolean;
-  reason?: string;
-  patientName?: string;
-  token?: string;
-  expectedToken?: string;
-}> {
+): Promise<PatientAccessResult> {
   if (!patientId) {
     return {valid: false, reason: 'معرف المريض مفقود.'};
   }
 
-  const cleanExpectedToken = generatePatientToken(patientId);
-
-  // 1. Verify active session only if the patient still exists in Firestore
-  try {
-    const saved = sessionStorage.getItem(SESSION_STORAGE_KEY);
-    if (saved) {
-      const session: PatientAuthSession = JSON.parse(saved);
-      if (session.patientId === patientId && (Date.now() - session.verifiedAt < 48 * 3600 * 1000)) {
-        const pSnap = await getDoc(doc(db, 'patients', patientId));
-        if (pSnap.exists()) {
-          return {
-            valid: true,
-            patientName: pSnap.data().name || session.patientName,
-            token: session.token,
-            expectedToken: cleanExpectedToken
-          };
-        }
-        sessionStorage.removeItem(SESSION_STORAGE_KEY);
-      }
+  // 1. An already signed-in patient session for this same file.
+  if ((await currentPatientClaim()) === patientId) {
+    try {
+      const snap = await getDoc(doc(db, 'patients', patientId));
+      if (snap.exists()) return {valid: true, patientName: snap.data().name || ''};
+    } catch (e) {
+      console.warn('Session check error:', e);
     }
-  } catch (e) {
-    console.warn('Session check error:', e);
   }
 
-  // 2. Token is required when no valid active session exists
-  if (!tokenFromUrl) {
+  // 2. Otherwise a card token is required.
+  const token = (tokenFromUrl || '').trim();
+  if (!token) {
     return {
       valid: false,
-      expectedToken: cleanExpectedToken,
-      reason: 'رمز الأمان (Token) مفقود. لحماية خصوصية بياناتك الطبية، يرجى مسح رمز الـ QR المخصص لك من كارت المتابعة الخاص بك.'
+      reason: 'رمز الأمان مفقود. لحماية خصوصية بياناتك الطبية، امسح رمز الـ QR المطبوع على كارت المتابعة أو أدخل الرمز المكتوب عليه.'
     };
   }
 
-  // 3. Strict verification against existing Firestore patient record
   try {
-    const pRef = doc(db, 'patients', patientId);
-    const snap = await getDoc(pRef);
-
-    if (!snap.exists()) {
+    const res = await fetch('/api/patient-login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({patientId, token})
+    });
+    if (res.status === 429) {
+      return {valid: false, reason: 'محاولات كثيرة. انتظر عدة دقائق ثم حاول مرة أخرى.'};
+    }
+    if (res.status === 400 || res.status === 401) {
       return {
         valid: false,
-        expectedToken: cleanExpectedToken,
-        reason: `لا يوجد ملف طبي مسجل برقم (#${patientId}). يرجى مراجعة العيادة.`
+        reason: 'رقم الملف أو الرمز غير صحيح. إذا كان الكارت قديماً اطلب من العيادة إصدار كارت جديد.'
       };
     }
-
-    const data = snap.data();
-    const patientName = data.name || `المريض #${patientId}`;
-    const firestoreAccessToken = data.accessToken || '';
-    const firestoreSecurityToken = data.securityToken || '';
-    const patientDob = data.dob || '';
-
-    const entered = tokenFromUrl.trim().toLowerCase();
-    const enteredWithoutPrefix = entered.replace(/^cp_/, '');
-
-    const validTokens: string[] = [
-      cleanExpectedToken.toLowerCase(),
-      cleanExpectedToken.replace(/^cp_/, '').toLowerCase(),
-      generateTokenWithDob(patientId, patientDob).toLowerCase(),
-      generateTokenWithDob(patientId, patientDob).replace(/^cp_/, '').toLowerCase()
-    ];
-
-    if (firestoreAccessToken) {
-      validTokens.push(firestoreAccessToken.toLowerCase());
-      validTokens.push(firestoreAccessToken.replace(/^cp_/, '').toLowerCase());
+    if (!res.ok) {
+      return {valid: false, reason: 'تعذر التحقق من خادم العيادة حالياً. يرجى المحاولة لاحقاً.'};
     }
-    if (firestoreSecurityToken) {
-      validTokens.push(firestoreSecurityToken.toLowerCase());
-      validTokens.push(firestoreSecurityToken.replace(/^cp_/, '').toLowerCase());
-    }
-
-    const isMatch = validTokens.includes(entered) || validTokens.includes(enteredWithoutPrefix);
-
-    if (!isMatch) {
-      return {
-        valid: false,
-        expectedToken: cleanExpectedToken,
-        reason: 'رمز التحقق الأمني غير صحيح أو لا يطابق هذا الملف. غير مصرح بالوصول.'
-      };
-    }
-
-    const newSession: PatientAuthSession = {
+    const data = await res.json();
+    await signInWithCustomToken(auth, data.customToken);
+    const session: PatientAuthSession = {
       patientId,
-      token: tokenFromUrl,
-      patientName,
+      patientName: data.patientName || '',
       verifiedAt: Date.now()
     };
-    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(newSession));
-
-    return {valid: true, patientName, token: tokenFromUrl, expectedToken: cleanExpectedToken};
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+    return {valid: true, patientName: data.patientName || ''};
   } catch (err) {
     console.error('Verification error:', err);
-    return {
-      valid: false,
-      expectedToken: cleanExpectedToken,
-      reason: 'تعذر التحقق من خادم العيادة حالياً. يرجى المحاولة لاحقاً.'
-    };
+    return {valid: false, reason: 'تعذر التحقق من خادم العيادة حالياً. يرجى المحاولة لاحقاً.'};
   }
 }
 
