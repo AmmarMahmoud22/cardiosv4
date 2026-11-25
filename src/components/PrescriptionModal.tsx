@@ -2,6 +2,7 @@ import React, {useState, useEffect} from 'react';
 import {X, Plus, Trash2, Printer, Share2, Pill, Check, UserCheck} from 'lucide-react';
 import {collection, getDocs, addDoc, query, where} from 'firebase/firestore';
 import {db} from '../lib/firebase';
+import {describeWriteError} from '../lib/writeDiagnostics';
 import PrintableMedicalDocument from './PrintableMedicalDocument';
 
 interface Props {
@@ -118,8 +119,8 @@ export default function PrescriptionModal({
       });
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
-    } catch {
-      setSaveError('تعذر حفظ الروشتة، يرجى المحاولة مرة أخرى.');
+    } catch (err) {
+      setSaveError('تعذر حفظ الروشتة، يرجى المحاولة مرة أخرى. [' + (await describeWriteError(err, selectedPatient.id)) + ']');
     } finally {
       setSaving(false);
     }
