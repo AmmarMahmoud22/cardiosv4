@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { addDoc, collection, getDocs, query, where } from 'firebase/firestore';
+import React, { useEffect, useRef, useState } from 'react';
+import { collection, doc, getDoc, getDocs, query, where, writeBatch } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { describeWriteError } from '../lib/writeDiagnostics';
 import { ClinicContract, ClinicInvoice, StaffRole } from '../types/clinic';
@@ -51,6 +51,12 @@ export default function BillingModal({
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Fixed once per modal session so a retry targets the same documents instead of creating new ones.
+  const sessionRef = useRef<{ id: string; number: string; at: string } | null>(null);
+  if (!sessionRef.current) {
+    const rnd = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    sessionRef.current = { id: 'inv_' + rnd, number: `INV-${Date.now().toString().slice(-6)}`, at: new Date().toISOString() };
+  }
 
   useEffect(() => {
     if (!doctorId) return;
@@ -99,8 +105,20 @@ export default function BillingModal({
     setSaving(true);
     setError('');
     try {
-      const now = new Date().toISOString();
-      const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`;
+      const { id: invoiceId, number: invoiceNumber, at: now } = sessionRef.current!;
+      const patientInvoiceRef = doc(db, 'patients', patientId, 'invoices', invoiceId);
+      // If an earlier attempt actually committed (lost response), do not write again.
+      let alreadySaved = false;
+      try {
+        alreadySaved = (await getDoc(patientInvoiceRef)).exists();
+      } catch {
+        alreadySaved = false;
+      }
+      if (alreadySaved) {
+        onSaved?.();
+        onClose();
+        return;
+      }
 
       const invoicePayload: Omit<ClinicInvoice, 'id'> = {
         invoiceNumber,
@@ -128,14 +146,15 @@ export default function BillingModal({
         notes: notes.trim()
       };
 
-      await Promise.all([
-        addDoc(collection(db, 'patients', patientId, 'invoices'), {
-          ...invoicePayload,
-          amount: patientPayable,
-          description: `${serviceLabel.trim()} (${invoicePayload.contractName})`
-        }),
-        ...(doctorId ? [addDoc(collection(db, 'clinic_invoices'), invoicePayload)] : [])
-      ]);
+      // One atomic batch: both invoice copies are written together or not at all.
+      const batch = writeBatch(db);
+      batch.set(patientInvoiceRef, {
+        ...invoicePayload,
+        amount: patientPayable,
+        description: `${serviceLabel.trim()} (${invoicePayload.contractName})`
+      });
+      if (doctorId) batch.set(doc(db, 'clinic_invoices', invoiceId), invoicePayload);
+      await batch.commit();
 
       onSaved?.();
       onClose();
