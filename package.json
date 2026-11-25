@@ -43,5 +43,8 @@
     "tsx": "^4.10.5",
     "typescript": "^5.4.5",
     "vite-plugin-pwa": "^2.0.0"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }
