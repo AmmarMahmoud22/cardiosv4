@@ -36,7 +36,7 @@ import PatientProfile from './PatientProfile';
 import CalendarView from './Calendar';
 import PatientMobileDashboard from './PatientMobileDashboard';
 import AlertPanel from './AlertPanel';
-import NewPatientModal from './NewPatientModal';
+import NewPatientModal from './NewPatientIntakeModal';
 import PrescriptionModal from './PrescriptionModal';
 import ReportsModal from './ReportsModal';
 import GeminiChat from './GeminiChat';
