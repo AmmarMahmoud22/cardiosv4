@@ -166,19 +166,6 @@ app.post('/api/patient-login', async (req, res) => {
     return res.json({ customToken, patientName: data?.name || '' });
   } catch (e: any) {
     console.warn('patient-login error:', e?.message || e);
-    // TEMPORARY diagnostic (non-secret identifiers only): remove once the IAM issue is settled.
-    try {
-      const raw = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-      console.warn('patient-login diag:', JSON.stringify({
-        code: e?.code,
-        sa: raw.client_email,
-        saProject: raw.project_id,
-        dbId: firebaseWebConfig.firestoreDatabaseId,
-        project: firebaseWebConfig.projectId,
-      }));
-    } catch {
-      console.warn('patient-login diag: service account env is not valid JSON');
-    }
     return res.status(500).json({ error: 'login_failed' });
   }
 });
