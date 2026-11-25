@@ -24,6 +24,7 @@ import {
   subscribeToKnowledgeSources,
   DEFAULT_KNOWLEDGE_SETTINGS
 } from '../lib/knowledgeBase';
+import { authedFetch } from '../lib/apiClient';
 
 interface ChatMessage {
   role: 'user' | 'model';
@@ -164,7 +165,7 @@ export default function GeminiChat({
         getKnowledgeSettings()
       ]);
 
-      const response = await fetch('/api/chat', {
+      const response = await authedFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

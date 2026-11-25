@@ -183,7 +183,7 @@ export default function NewPatientModal({
             {
               systolic: Number(systolic),
               diastolic: Number(diastolic),
-              heartRate: Number(heartRate) || 72,
+              ...(Number(heartRate) > 0 ? {heartRate: Number(heartRate)} : {}),
               timestamp: new Date().toISOString()
             }
           ]
@@ -198,7 +198,7 @@ export default function NewPatientModal({
         await addDoc(collection(db, 'patients', newPatientId, 'vitals'), {
           systolic: Number(systolic),
           diastolic: Number(diastolic),
-          heartRate: Number(heartRate) || 72,
+          ...(Number(heartRate) > 0 ? {heartRate: Number(heartRate)} : {}),
           timestamp: new Date().toISOString(),
           patientId: newPatientId,
           formattedDate: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) + ' - ' + new Date().toLocaleDateString('ar-EG')
@@ -566,7 +566,7 @@ export default function NewPatientModal({
                       type="number"
                       value={systolic}
                       onChange={(e) => setSystolic(e.target.value)}
-                      placeholder="130"
+                      placeholder="اتركه فارغاً إن لم يُقَس"
                       className="w-full text-sm p-2.5 bg-white border border-slate-300 rounded-xl text-center font-bold font-mono"
                     />
                   </div>
@@ -586,7 +586,7 @@ export default function NewPatientModal({
                       type="number"
                       value={heartRate}
                       onChange={(e) => setHeartRate(e.target.value)}
-                      placeholder="72"
+                      placeholder="اختياري"
                       className="w-full text-sm p-2.5 bg-white border border-slate-300 rounded-xl text-center font-bold font-mono"
                     />
                   </div>

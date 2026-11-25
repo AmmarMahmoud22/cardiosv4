@@ -22,7 +22,6 @@ import {
   deleteLabEverywhere,
   getLocalDeletedIds,
   markSeedFlags,
-  purgeAllDemoData,
   purgeAllNonPrimaryAccounts,
   reconcileOrphanedSeedsWithSystemUsers,
   syncDoctorScheduleSummary,
@@ -259,8 +258,7 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
           setAdminUser(user);
           setIsAuthenticated(true);
           setAuthError('');
-          await purgeAllDemoData().catch(() => {});
-          await purgeAllNonPrimaryAccounts(user.uid, false).catch(() => {});
+          // Safety: signing in never deletes data. Account cleanup only runs from the explicit, confirmed button.
           setAuthChecking(false);
           return;
         }
@@ -1182,6 +1180,15 @@ export default function SuperAdminPortal({ onBack }: SuperAdminPortalProps) {
                 if (!confirmPurgeOthers) {
                   setConfirmPurgeOthers(true);
                   setTimeout(() => setConfirmPurgeOthers(false), 5000);
+                  return;
+                }
+                const typed = window.prompt(
+                  isRTL
+                    ? 'سيتم حذف كل المرضى والأطباء والمعامل والرسائل نهائياً. اكتب DELETE للتأكيد:'
+                    : 'This permanently deletes all patients, doctors, labs and messages. Type DELETE to confirm:'
+                );
+                if (typed !== 'DELETE') {
+                  setConfirmPurgeOthers(false);
                   return;
                 }
                 setPurgingOthers(true);

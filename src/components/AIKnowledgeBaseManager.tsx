@@ -38,6 +38,7 @@ import {
   IngestionProgress
 } from '../lib/knowledgeBase';
 import { useLanguage } from '../context/LanguageContext';
+import { authedFetch } from '../lib/apiClient';
 
 const CATEGORIES = [
   { value: 'إرشادات ESC للقلب', labelAr: 'إرشادات الجمعية الأوروبية للقلب (ESC)', labelEn: 'ESC Cardiology Guidelines' },
@@ -166,7 +167,7 @@ export default function AIKnowledgeBaseManager() {
 
     try {
       const { chunks, activeSourceCount } = await retrieveRelevantChunks(q, 7);
-      const res = await fetch('/api/chat', {
+      const res = await authedFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,8 +1,8 @@
-import React, {useEffect} from 'react';
+import React, {useEffect, useState} from 'react';
 import {X, Printer, Share2, QrCode, Smartphone, CheckCircle, ShieldCheck, Copy} from 'lucide-react';
-import {doc, setDoc} from 'firebase/firestore';
+import {doc, getDoc, setDoc} from 'firebase/firestore';
 import {db} from '../lib/firebase';
-import {generatePatientToken} from '../lib/patientAuth';
+import {generatePatientToken, isStrongPatientToken} from '../lib/patientAuth';
 
 interface Props {
   patientName: string;
@@ -26,19 +26,36 @@ export default function PatientQRCardModal({
 
   // Generate secure token and portal access URL
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://cardios-clinic.app';
-  const patientToken = generatePatientToken(patientId);
+  const [patientToken, setPatientToken] = useState<string>('');
+  const [tokenError, setTokenError] = useState<string>('');
   const portalUrl = `${currentOrigin}/?patientId=${patientId}&portal=true&token=${patientToken}`;
   const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(portalUrl)}&color=1e3a8a&bgcolor=ffffff`;
 
-  // Ensure patient document in Firestore has this exact token stored
+  // Use the token already stored on the patient record. If there is none (or it is an
+  // old short token), a clinician issues a new random one and stores it.
   useEffect(() => {
-    try {
-      const pRef = doc(db, 'patients', patientId);
-      setDoc(pRef, {accessToken: patientToken, securityToken: patientToken}, {merge: true});
-    } catch (e) {
-      console.warn('Failed to sync patient token to firestore:', e);
-    }
-  }, [patientId, patientToken]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const pRef = doc(db, 'patients', patientId);
+        const snap = await getDoc(pRef);
+        const stored = snap.exists() ? (snap.data().accessToken || snap.data().securityToken) : '';
+        if (isStrongPatientToken(stored)) {
+          if (!cancelled) setPatientToken(stored);
+          return;
+        }
+        const fresh = generatePatientToken();
+        await setDoc(pRef, {accessToken: fresh, securityToken: fresh}, {merge: true});
+        if (!cancelled) setPatientToken(fresh);
+      } catch (e) {
+        console.warn('Failed to load or issue the patient card token:', e);
+        if (!cancelled) setTokenError('تعذر إصدار الكارت. اطلب من العيادة إصدار كارت جديد.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId]);
 
   const whatsappText = `*كارت المتابعة الذكية - ${resolvedClinicName}* 🫀
 عزيزي المريض: *${patientName}*
