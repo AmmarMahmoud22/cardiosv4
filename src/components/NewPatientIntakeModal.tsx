@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useRef, useState} from 'react';
 import {
   X,
   User,
@@ -19,7 +19,7 @@ import {
   Loader2,
   Sparkles
 } from 'lucide-react';
-import {collection, doc, setDoc, writeBatch} from 'firebase/firestore';
+import {doc, getDoc, setDoc, writeBatch} from 'firebase/firestore';
 import {db} from '../lib/firebase';
 import {generatePatientToken} from '../lib/patientAuth';
 
@@ -66,9 +66,18 @@ export default function NewPatientModal({
   const [activeStep, setActiveStep] = useState<'profile' | 'clinical' | 'vitals_meds' | 'success'>('profile');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Set when the patient document was written but the vitals/prescription batch failed.
-  // A retry then finishes that same file instead of creating a duplicate patient.
-  const [partialPatient, setPartialPatient] = useState<{id: string; token: string; data: Record<string, any>} | null>(null);
+  // The id, token and submitted data of the first save attempt. Kept for the whole modal
+  // session so a retry (after a failure or a lost response) finishes the SAME patient file
+  // instead of creating a second one. `docConfirmed` is true once setDoc resolved.
+  const attemptRef = useRef<{
+    id: string;
+    token: string;
+    createdAt: string;
+    docConfirmed: boolean;
+    batchTried: boolean;
+    snapshot: Record<string, string> | null;
+  } | null>(null);
+  const [lockedPatientId, setLockedPatientId] = useState<string | null>(null);
 
   // 1. Demographics
   const [name, setName] = useState('');
@@ -180,14 +189,31 @@ export default function NewPatientModal({
     setError(null);
 
     let newPatientId = '';
-    let patientDocCreated = false;
     try {
-      // Generate clean sequential or random id
-      newPatientId = partialPatient ? partialPatient.id : 'P' + Date.now().toString().slice(-6);
-      const securityToken = partialPatient ? partialPatient.token : generatePatientToken(newPatientId);
+      // Create the id/token once per modal session and remember them BEFORE any write.
+      if (!attemptRef.current) {
+        const id = 'P' + Date.now().toString().slice(-6);
+        attemptRef.current = {
+          id,
+          token: generatePatientToken(id),
+          createdAt: new Date().toISOString(),
+          docConfirmed: false,
+          batchTried: false,
+          snapshot: null
+        };
+      }
+      const attempt = attemptRef.current;
+      newPatientId = attempt.id;
+      const securityToken = attempt.token;
 
       const finalDiagnosis = customDiagnosis.trim() ? customDiagnosis.trim() : diagnosis;
       const hasLabs = Boolean(ldl.trim() || creatinine.trim() || hba1c.trim());
+      const vitalsPayload = systolic && diastolic ? {
+        systolic: Number(systolic),
+        diastolic: Number(diastolic),
+        ...(Number(heartRate) > 0 ? {heartRate: Number(heartRate)} : {})
+      } : null;
+      const validMeds = staffRole !== 'receptionist' ? medications.filter(m => m.name.trim().length > 0) : [];
 
       const patientDocData: Record<string, any> = {
         id: newPatientId,
@@ -212,7 +238,7 @@ export default function NewPatientModal({
         smoker,
         securityToken,
         accessToken: securityToken,
-        createdAt: new Date().toISOString(),
+        createdAt: attempt.createdAt,
         ...(hasLabs ? {
           labs: {
             ldl: ldl.trim() || 'غير مسجل',
@@ -220,65 +246,96 @@ export default function NewPatientModal({
             hba1c: hba1c.trim() || 'غير مسجل'
           }
         } : {}),
-        ...(systolic && diastolic ? {
-          initialVitals: [
-            {
-              systolic: Number(systolic),
-              diastolic: Number(diastolic),
-              ...(Number(heartRate) > 0 ? {heartRate: Number(heartRate)} : {}),
-              timestamp: new Date().toISOString()
-            }
-          ]
+        ...(vitalsPayload ? {
+          initialVitals: [{...vitalsPayload, timestamp: attempt.createdAt}]
         } : {})
       };
 
-      // 1. Create Patient document
-      if (partialPatient) {
-        // The patient document from the earlier attempt already exists; only the
-        // vitals/prescription batch is retried against it.
-        patientDocCreated = true;
+      // What this attempt submits, in three groups. A retry must submit exactly the same,
+      // because the patient document of the first attempt may already exist and is never
+      // rewritten with different content.
+      const snapshot = {
+        profile: JSON.stringify(patientDocData),
+        vitals: JSON.stringify(vitalsPayload),
+        medications: JSON.stringify(validMeds)
+      };
+      if (attempt.snapshot) {
+        const changed: string[] = [];
+        if (snapshot.profile !== attempt.snapshot.profile) changed.push('بيانات المريض الأساسية والسريرية');
+        if (snapshot.vitals !== attempt.snapshot.vitals) changed.push('القياسات الحيوية');
+        if (snapshot.medications !== attempt.snapshot.medications) changed.push('الأدوية');
+        if (changed.length > 0) {
+          setLockedPatientId(newPatientId);
+          setError(
+            'تم بدء حفظ الملف برقم ' + newPatientId + ' ولم يكتمل. لن يُحفظ أي تعديل بعد المحاولة الأولى، ' +
+            'وتم تغيير: ' + changed.join('، ') + '. أعد القيم كما أُدخلت في المحاولة الأولى ثم أعد المحاولة، ' +
+            'أو عدّلها لاحقا من ملف المريض بعد اكتماله. لم يُكتب شيء الآن.'
+          );
+          return;
+        }
       } else {
-        await setDoc(doc(db, 'patients', newPatientId), patientDocData);
-        patientDocCreated = true;
-        setPartialPatient({id: newPatientId, token: securityToken, data: patientDocData});
+        attempt.snapshot = snapshot;
       }
 
-      // 2 + 3. First vital reading and initial prescription, committed together in one
-      // batch. (The security rules read the patient document that step 1 created, so
-      // these cannot share a batch with it for a non-admin doctor.)
+      // 1. Patient document. After an uncertain earlier attempt, check whether it already exists.
+      if (!attempt.docConfirmed) {
+        let exists = false;
+        if (attempt.batchTried || lockedPatientId) {
+          try {
+            exists = (await getDoc(doc(db, 'patients', newPatientId))).exists();
+          } catch {
+            exists = false; // unreadable: fall back to writing the identical document
+          }
+        }
+        if (!exists) {
+          await setDoc(doc(db, 'patients', newPatientId), patientDocData);
+        }
+        attempt.docConfirmed = true;
+        setLockedPatientId(newPatientId);
+      }
+
+      // 2 + 3. First vital reading and initial prescription in one batch, with fixed ids so a
+      // retry can never add a second copy. (The rules read the patient document through get(),
+      // so these cannot share a batch with the patient document for a non-admin doctor.)
+      const vitalRef = doc(db, 'patients', newPatientId, 'vitals', newPatientId + '_first_vitals');
+      const rxRef = doc(db, 'patients', newPatientId, 'prescriptions', newPatientId + '_first_rx');
+      let vitalExists = false;
+      let rxExists = false;
+      if (attempt.batchTried) {
+        // An earlier batch may have committed even though its response was lost.
+        try { vitalExists = vitalsPayload ? (await getDoc(vitalRef)).exists() : false; } catch { vitalExists = false; }
+        try { rxExists = validMeds.length > 0 ? (await getDoc(rxRef)).exists() : false; } catch { rxExists = false; }
+      }
       const batch = writeBatch(db);
       let batchOps = 0;
-      if (systolic && diastolic) {
-        batch.set(doc(collection(db, 'patients', newPatientId, 'vitals')), {
-          systolic: Number(systolic),
-          diastolic: Number(diastolic),
-          ...(Number(heartRate) > 0 ? {heartRate: Number(heartRate)} : {}),
-          timestamp: new Date().toISOString(),
+      if (vitalsPayload && !vitalExists) {
+        batch.set(vitalRef, {
+          ...vitalsPayload,
+          timestamp: attempt.createdAt,
           patientId: newPatientId,
-          formattedDate: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) + ' - ' + new Date().toLocaleDateString('ar-EG')
+          formattedDate: new Date(attempt.createdAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) + ' - ' + new Date(attempt.createdAt).toLocaleDateString('ar-EG')
         });
         batchOps++;
       }
-      if (staffRole !== 'receptionist' && medications.length > 0) {
-        const validMeds = medications.filter(m => m.name.trim().length > 0);
-        if (validMeds.length > 0) {
-          batch.set(doc(collection(db, 'patients', newPatientId, 'prescriptions')), {
-            patientId: newPatientId,
-            doctorName: doctorName || 'الطبيب المعالج',
-            date: new Date().toLocaleDateString('ar-EG'),
-            diagnosis: finalDiagnosis,
-            medications: validMeds,
-            notes: 'تم صرف الروشتة المبدئية عند فتح الملف الطبي.',
-            createdAt: new Date().toISOString()
-          });
-          batchOps++;
-        }
+      if (validMeds.length > 0 && !rxExists) {
+        batch.set(rxRef, {
+          patientId: newPatientId,
+          doctorName: doctorName || 'الطبيب المعالج',
+          date: new Date(attempt.createdAt).toLocaleDateString('ar-EG'),
+          diagnosis: finalDiagnosis,
+          medications: validMeds,
+          notes: 'تم صرف الروشتة المبدئية عند فتح الملف الطبي.',
+          createdAt: attempt.createdAt
+        });
+        batchOps++;
       }
       if (batchOps > 0) {
+        attempt.batchTried = true;
         await batch.commit();
       }
 
-      setPartialPatient(null);
+      attemptRef.current = null;
+      setLockedPatientId(null);
       setCreatedPatientId(newPatientId);
       setCreatedSecurityToken(securityToken);
       setActiveStep('success');
@@ -288,12 +345,15 @@ export default function NewPatientModal({
       }
     } catch (err: any) {
       console.error('Error creating patient:', err);
-      // Nothing is deleted here. If the patient document was already written, keep its id
-      // so the retry completes that same file instead of creating a duplicate.
-      const cleanupNote = patientDocCreated && newPatientId
-        ? ' تم حفظ بيانات الملف الأساسية برقم ' + newPatientId + ' لكن القياسات/الروشتة لم تُحفظ. عند إعادة المحاولة سيكمل نفس الملف ولن يُنشئ ملفا مكررا.'
+      // Nothing is deleted. The id is kept so a retry completes the same file.
+      const a = attemptRef.current;
+      const note = a
+        ? (a.docConfirmed
+            ? ' تم حفظ بيانات الملف الأساسية برقم ' + a.id + ' لكن القياسات/الروشتة قد لا تكون حُفظت. عند إعادة المحاولة سيُكمَل نفس الملف ولن يُنشأ ملف مكرر، ولن تُقبل تعديلات على القيم المُدخلة.'
+            : ' لم يتأكد حفظ الملف رقم ' + a.id + '. عند إعادة المحاولة سيتحقق التطبيق منه أولا ولن يُنشئ ملفا مكررا.')
         : '';
-      setError('حدث خطأ أثناء حفظ الملف الطبي: ' + (err.message || '') + cleanupNote);
+      if (a && !a.docConfirmed) { setLockedPatientId(a.id); }
+      setError('حدث خطأ أثناء حفظ الملف الطبي: ' + (err.message || '') + note);
     } finally {
       setSaving(false);
     }
