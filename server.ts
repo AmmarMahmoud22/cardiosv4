@@ -20,9 +20,18 @@ app.use(express.json({ limit: '5mb' }));
 // ---------------------------------------------------------------------------
 // Firebase Admin, request authentication and rate limiting
 // ---------------------------------------------------------------------------
-const firebaseWebConfig = JSON.parse(
-  fs.readFileSync(path.resolve(__dirname, 'firebase-applet-config.json'), 'utf8')
-);
+// The config file may not be bundled into a serverless function, so fall back to the project id.
+let firebaseWebConfig: { projectId: string; firestoreDatabaseId?: string } = {
+  projectId: process.env.FIREBASE_PROJECT_ID || 'gen-lang-client-0121287303',
+  firestoreDatabaseId: process.env.FIRESTORE_DATABASE_ID || 'ai-studio-cardios-dbca3e2d-3c02-49eb-b99b-3544f5781a0c',
+};
+try {
+  firebaseWebConfig = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, 'firebase-applet-config.json'), 'utf8')
+  );
+} catch {
+  /* keep the fallback */
+}
 
 function getAdminApp() {
   if (getApps().length) return getApps()[0];
