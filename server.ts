@@ -3,6 +3,11 @@ import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
+import crypto from 'crypto';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 
 dotenv.config();
 
@@ -11,6 +16,83 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
+
+// ---------------------------------------------------------------------------
+// Firebase Admin, request authentication and rate limiting
+// ---------------------------------------------------------------------------
+const firebaseWebConfig = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, 'firebase-applet-config.json'), 'utf8')
+);
+
+function getAdminApp() {
+  if (getApps().length) return getApps()[0];
+  const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (sa) {
+    return initializeApp({ credential: cert(JSON.parse(sa)), projectId: firebaseWebConfig.projectId });
+  }
+  // Without a service account only ID-token verification works (public keys).
+  return initializeApp({ projectId: firebaseWebConfig.projectId });
+}
+
+function canUseAdminData(): boolean {
+  return Boolean(process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FIRESTORE_EMULATOR_HOST);
+}
+
+type Bucket = { count: number; resetAt: number };
+const rateBuckets = new Map<string, Bucket>();
+
+// Best-effort limiter (in memory, per server instance). On serverless hosts each
+// instance has its own counters, so use it together with a quota in the database.
+function rateLimited(key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  const b = rateBuckets.get(key);
+  if (!b || b.resetAt <= now) {
+    rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    if (rateBuckets.size > 5000) {
+      for (const [k, v] of rateBuckets) if (v.resetAt <= now) rateBuckets.delete(k);
+    }
+    return false;
+  }
+  b.count += 1;
+  return b.count > limit;
+}
+
+function deny(res: express.Response, status: number, message: string) {
+  return res.status(status).json({ error: message, response: message, advice: message, citations: [], refused: true });
+}
+
+async function requireUser(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const header = String(req.headers.authorization || '');
+  const match = header.match(/^Bearer (.+)$/);
+  if (!match) {
+    return deny(res, 401, 'تسجيل الدخول مطلوب لاستخدام هذه الخدمة.');
+  }
+  try {
+    const decoded = await getAdminAuth(getAdminApp()).verifyIdToken(match[1]);
+    // Patient-portal sessions must not use the clinician AI services.
+    if ((decoded as any).role === 'patient') {
+      return deny(res, 403, 'هذه الخدمة غير متاحة لحساب المريض.');
+    }
+    (req as any).uid = decoded.uid;
+    if (rateLimited(`ai:${decoded.uid}`, 20, 60_000)) {
+      return deny(res, 429, 'تم تجاوز حد الاستخدام. حاول بعد دقيقة.');
+    }
+    return next();
+  } catch {
+    return deny(res, 401, 'جلسة الدخول غير صالحة. سجّل الدخول مرة أخرى.');
+  }
+}
+
+const AI_UNAVAILABLE_MESSAGE =
+  '⚠️ خدمة الذكاء الاصطناعي غير متاحة حالياً. لم يتم إنشاء أي تحليل أو توصية. ' +
+  'راجع بيانات المريض والمراجع الطبية مباشرة، وأعد المحاولة لاحقاً.';
+
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
+
 
 function getApiKey(): string | undefined {
   return process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
@@ -35,48 +117,51 @@ function getAiClient(): GoogleGenAI {
   return cachedAiClient;
 }
 
-// Helper for generating clinical cardiology fallback responses (used only when strictKnowledgeOnly is OFF)
-function generateCardiologyFallback(message: string, patientContext?: any): string {
-  const patientName = patientContext?.name || 'المريض';
-  const vitals = patientContext?.vitals || [];
-  const latestVital = vitals.length > 0 ? vitals[vitals.length - 1] : null;
-  const meds = patientContext?.medications || [];
-  const diagnosis = patientContext?.diagnosis || 'ارتفاع ضغط الدم ومتابعة القلب';
 
-  const lowerMsg = message.toLowerCase();
+/**
+ * Patient QR login: checks the card token on the server and returns a Firebase
+ * custom token that only carries this patient's id. Firestore rules then limit
+ * that session to the patient's own records.
+ */
+app.post('/api/patient-login', async (req, res) => {
+  const patientId = String(req.body?.patientId || '').trim();
+  const token = String(req.body?.token || '').trim();
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
 
-  if (lowerMsg.includes('تعارض') || lowerMsg.includes('drug') || lowerMsg.includes('أدوي') || lowerMsg.includes('روشتة')) {
-    const medsList = meds.map((m: any) => `${m.name} (${m.dosage || ''})`).join('، ');
-    return `📋 **مراجعة التعارضات والأمان الدوائي لـ ${patientName}:**
-- **الأدوية النشطة المسجلة:** ${medsList || 'Bisoprolol 5mg, Atorvastatin 20mg, Aspirin 81mg'}
-- **تحليل التوافق وفق إرشادات الجمعية الأوروبية للقلب (ESC 2024):**
-  1. **الجمع بين حاصرات بيتا والستاتين:** متوافق سريرياً وموصى به لمرضى شرايين القلب، مع ضرورة متابعة إنزيمات الكبد ووظائف الكلى دورياً.
-  2. **مضادات التجلط / الأسبرين:** يجب التأكد من عدم وجود تاريخ قرحة معدية نشطة، وتناول الجرعة بعد وجبة رئيسية.
-  3. **توصية الطبيب:** لم يتم رصد أي تعارض دوائي حرج يستدعي الإيقاف الفوري، والجرعات الحالية آمنة وضمن النطاق العلاجي المعتمد.`;
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(patientId) || token.length < 20 || token.length > 128) {
+    return res.status(400).json({ error: 'invalid_credentials' });
   }
-
-  if (lowerMsg.includes('ضغط') || lowerMsg.includes('vital') || lowerMsg.includes('قراء') || lowerMsg.includes('نبض')) {
-    const s = latestVital?.systolic || 135;
-    const d = latestVital?.diastolic || 85;
-    const stage = s >= 140 || d >= 90 ? 'مرحلة ثانية (Stage 2 Hypertension)' : s >= 130 ? 'مرحلة أولى (Stage 1)' : 'مضبوط ومثالي (<130/80 mmHg)';
-    return `🩺 **تحليل العلامات الحيوية لـ ${patientName}:**
-- **آخر قراءة مسجلة:** ${s}/${d} mmHg (التصنيف: ${stage})
-- **متوسط القراءات الأسبوعية:** مستقرة مع استجابة تدريجية للعلاج.
-- **التوصيات السريرية:**
-  1. الاستمرار على الخطة الدوائية الحالية دون تغيير مفاجئ.
-  2. توجيه المريض لمواصلة القياس المنزلي المنتظم صباحاً ومساءً عبر كارت المريض الذكي.
-  3. تقليل استهلاك الصوديوم (<2g/يوم) وممارسة المشي الخفيف المنتظم.`;
+  if (rateLimited(`pl-ip:${ip}`, 20, 10 * 60_000) || rateLimited(`pl-id:${patientId}`, 8, 10 * 60_000)) {
+    return deny(res, 429, 'too_many_attempts');
   }
+  if (!canUseAdminData()) {
+    return res.status(503).json({ error: 'patient_login_not_configured' });
+  }
+  try {
+    const app = getAdminApp();
+    const dbId = firebaseWebConfig.firestoreDatabaseId;
+    const db = dbId ? getAdminFirestore(app, dbId) : getAdminFirestore(app);
+    const snap = await db.collection('patients').doc(patientId).get();
+    const data = snap.exists ? (snap.data() as any) : null;
+    const stored = [data?.accessToken, data?.securityToken].filter(
+      (t) => typeof t === 'string' && t.length >= 20
+    ) as string[];
+    const ok = stored.some((t) => safeEqual(t.toLowerCase(), token.toLowerCase()));
+    if (!ok) {
+      return deny(res, 401, 'invalid_credentials');
+    }
+    const customToken = await getAdminAuth(app).createCustomToken(`patient_${patientId}`, {
+      patientId,
+      role: 'patient',
+    });
+    return res.json({ customToken, patientName: data?.name || '' });
+  } catch (e: any) {
+    console.warn('patient-login error:', e?.message || e);
+    return res.status(500).json({ error: 'login_failed' });
+  }
+});
 
-  return `👨‍⚕️ **التقرير الاستشاري السريري لـ ${patientName}:**
-- **التشخيص النشط:** ${diagnosis}
-- **العلامات الحيوية الأخيرة:** ${latestVital ? `${latestVital.systolic}/${latestVital.diastolic} mmHg` : '130/80 mmHg'}
-- **الأدوية النشطة:** ${meds.length} أدوية مسجلة في الروشتة الذكية.
-- **الرأي الطبي استناداً لإرشادات ESC/AHA:**
-  الحالة في نطاق سريري مستقر ومطمئن. يُنصح بمواصلة المتابعة الدورية عبر المنظومة الذكية، وإجراء رسم قلب وتحليل دهون كامل خلال الزيارة القادمة.`;
-}
-
-app.post('/api/consult-ai', async (req, res) => {
+app.post('/api/consult-ai', requireUser, async (req, res) => {
   const { vitals, patientName } = req.body;
   const prompt = `Patient: ${patientName}. Vitals: ${JSON.stringify(vitals)}. Provide cardiology clinical advice regarding hypertension management based on these vitals.`;
 
@@ -99,14 +184,14 @@ app.post('/api/consult-ai', async (req, res) => {
     res.json({ advice: response.text });
   } catch (e) {
     console.warn('Consult AI fallback:', e);
-    res.json({ advice: generateCardiologyFallback('vitals', { name: patientName, vitals }) });
+    res.status(503).json({ advice: AI_UNAVAILABLE_MESSAGE, unavailable: true });
   }
 });
 
 /**
  * Generate dense vector embeddings for Knowledge Base ingestion & query retrieval
  */
-app.post('/api/ai/embed', async (req, res) => {
+app.post('/api/ai/embed', requireUser, async (req, res) => {
   const { texts } = req.body as { texts?: string[] };
 
   if (!Array.isArray(texts) || texts.length === 0) {
@@ -146,7 +231,7 @@ app.post('/api/ai/embed', async (req, res) => {
  * 2. Uploaded Admin Knowledge Base grounding (when strictKnowledgeOnly is active)
  * 3. Mandatory Page Number + Evidence citations
  */
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', requireUser, async (req, res) => {
   const {
     history,
     message,
@@ -271,10 +356,10 @@ ${sourcesContextBlock}
           refused: true,
         });
       }
-      return res.json({
-        response: generateCardiologyFallback(message, patientContext),
+      return res.status(503).json({
+        response: AI_UNAVAILABLE_MESSAGE,
         citations: [],
-        refused: false,
+        refused: true,
       });
     }
 
@@ -407,8 +492,7 @@ ${sourcesContextBlock}
         refused: false,
       });
     }
-    const fallback = generateCardiologyFallback(message, patientContext);
-    return res.json({ response: fallback, citations: [], refused: false });
+    return res.status(503).json({ response: AI_UNAVAILABLE_MESSAGE, citations: [], refused: true });
   }
 });
 

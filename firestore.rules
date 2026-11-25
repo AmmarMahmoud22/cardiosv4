@@ -84,6 +84,14 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/patients/$(patientId)).data;
     }
 
+    // Patient QR session: the server signs the patient in with a token that carries
+    // role=patient and the one patientId it was issued for.
+    function isPatientSession(patientId) {
+      return isSignedIn()
+        && request.auth.token.get('role', '') == 'patient'
+        && request.auth.token.get('patientId', '') == patientId;
+    }
+
     function isParentDoctor(patientId) {
       return isSignedIn() && patientExists(patientId) && getPatientData(patientId).doctorId == request.auth.uid;
     }
@@ -1002,6 +1010,7 @@ service cloud.firestore {
         || isActiveClinicStaff(existing())
         || (('clinicCode' in existing()) && isLinkedLabForClinic(existing().clinicCode))
         || (('patientUid' in existing()) && existing().patientUid == request.auth.uid)
+        || isPatientSession(patientId)
       );
       allow list: if isSignedIn() && (
         isAdmin()
@@ -1049,16 +1058,16 @@ service cloud.firestore {
       allow delete: if isValidId(patientId) && isSignedIn() && (isAdmin() || existing().doctorId == request.auth.uid);
 
       match /vitals/{vitalId} {
-        allow get: if isValidId(patientId) && isValidId(vitalId) && isSignedIn() && (isAdmin() || isParentDoctorOrStaff(patientId));
-        allow list: if isValidId(patientId) && isSignedIn() && (isAdmin() || isParentDoctorOrStaff(patientId));
-        allow create: if isValidId(patientId) && isValidId(vitalId) && isSignedIn() && isValidVital(incoming()) && (isAdmin() || isParentDoctorOrStaff(patientId));
+        allow get: if isValidId(patientId) && isValidId(vitalId) && isSignedIn() && (isAdmin() || isParentDoctorOrStaff(patientId) || isPatientSession(patientId));
+        allow list: if isValidId(patientId) && isSignedIn() && (isAdmin() || isParentDoctorOrStaff(patientId) || isPatientSession(patientId));
+        allow create: if isValidId(patientId) && isValidId(vitalId) && isSignedIn() && isValidVital(incoming()) && (isAdmin() || isParentDoctorOrStaff(patientId) || isPatientSession(patientId));
         allow update: if isValidId(patientId) && isValidId(vitalId) && isSignedIn() && isValidVital(incoming()) && isAdmin();
         allow delete: if isValidId(patientId) && isValidId(vitalId) && isSignedIn() && (isAdmin() || isParentDoctor(patientId));
       }
 
       match /prescriptions/{rxId} {
-        allow get: if isValidId(patientId) && isValidId(rxId) && isSignedIn() && (isAdmin() || isParentDoctorOrStaff(patientId));
-        allow list: if isValidId(patientId) && isSignedIn() && (isAdmin() || isParentDoctorOrStaff(patientId));
+        allow get: if isValidId(patientId) && isValidId(rxId) && isSignedIn() && (isAdmin() || isParentDoctorOrStaff(patientId) || isPatientSession(patientId));
+        allow list: if isValidId(patientId) && isSignedIn() && (isAdmin() || isParentDoctorOrStaff(patientId) || isPatientSession(patientId));
         allow create: if isValidId(patientId) && isValidId(rxId) && isSignedIn() && isValidPrescription(incoming()) && (isAdmin() || isParentDoctor(patientId));
         allow update: if isValidId(patientId) && isValidId(rxId) && isSignedIn() && isValidPrescription(incoming()) && isAdmin();
         allow delete: if isValidId(patientId) && isValidId(rxId) && isSignedIn() && (isAdmin() || isParentDoctor(patientId));
@@ -1293,6 +1302,12 @@ service cloud.firestore {
           isAdmin()
           || incoming().doctorId == request.auth.uid
           || isVerifiedStaffOfDoctor(incoming().doctorId)
+          || (
+            ('patientId' in incoming())
+            && isPatientSession(incoming().patientId)
+            && patientExists(incoming().patientId)
+            && getPatientData(incoming().patientId).doctorId == incoming().doctorId
+          )
         );
       allow update: if isValidId(vitalAlertId)
         && isSignedIn()
@@ -1310,12 +1325,17 @@ service cloud.firestore {
         isAdmin()
         || existing().doctorId == request.auth.uid
         || isParentDoctorOrStaff(existing().patientId)
+        || isPatientSession(existing().patientId)
       );
       allow create: if isValidId(messageId)
         && isSignedIn()
         && isValidMessage(incoming())
         && patientExists(incoming().patientId)
-        && (isAdmin() || isParentDoctorOrStaff(incoming().patientId));
+        && (
+          isAdmin()
+          || isParentDoctorOrStaff(incoming().patientId)
+          || (isPatientSession(incoming().patientId) && incoming().sender == 'patient')
+        );
       allow update: if isValidId(messageId) && isAdmin() && isValidMessage(incoming());
       allow delete: if isValidId(messageId) && isAdmin();
     }
