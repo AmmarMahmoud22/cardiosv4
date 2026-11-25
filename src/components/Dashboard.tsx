@@ -83,9 +83,10 @@ export default function Dashboard({
   const [clinicLogoIcon, setClinicLogoIcon] = useState<string>('HeartPulse');
   const [staffUids, setStaffUids] = useState<string[]>([]);
   const [authUid, setAuthUid] = useState<string>(() => auth.currentUser?.uid || '');
+  const [authReady, setAuthReady] = useState<boolean>(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setAuthUid(u?.uid || ''));
+    const unsub = onAuthStateChanged(auth, (u) => { setAuthUid(u?.uid || ''); setAuthReady(true); });
     return () => unsub();
   }, []);
 
@@ -723,6 +724,16 @@ export default function Dashboard({
             </div>
           </div>
         </div>
+
+        {/* Sign-in identity check: the security rules only accept writes when the Firebase sign-in
+            matches the clinic record. Show a clear message instead of silent save failures. */}
+        {authReady && !isReceptionist && currentDoctorId && (!authUid || authUid !== currentDoctorId) && (
+          <div className="bg-red-50 border border-red-300 text-red-800 rounded-2xl p-4 text-xs sm:text-sm font-bold leading-relaxed" role="alert">
+            {!authUid
+              ? 'لا توجد جلسة دخول فعّالة مع الخادم، لذلك سيفشل الحفظ. سجّل الخروج ثم ادخل مرة أخرى بالبريد وكلمة المرور.'
+              : 'حساب الدخول (' + authUid.slice(0, 6) + '…) يختلف عن سجل العيادة المعروض (' + currentDoctorId.slice(0, 6) + '…)، وقواعد الأمان ترفض الحفظ بهذا الاختلاف. لا تكرر الحفظ، وأبلغ الدعم بهذه الرسالة.'}
+          </div>
+        )}
 
         {/* Tab Content */}
         {activeTab === 'patients' && (
