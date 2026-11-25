@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { addDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
+import { describeWriteError } from '../lib/writeDiagnostics';
 import { ClinicContract, ClinicInvoice, StaffRole } from '../types/clinic';
 import { Receipt, X, CheckCircle2, CreditCard, Banknote, Smartphone, ShieldCheck } from 'lucide-react';
 
@@ -140,7 +141,7 @@ export default function BillingModal({
       onClose();
     } catch (err) {
       console.error('Error saving invoice:', err);
-      setError('تعذر حفظ الفاتورة، يرجى المحاولة مرة أخرى.');
+      setError('تعذر حفظ الفاتورة، يرجى المحاولة مرة أخرى. [' + (await describeWriteError(err, patientId)) + ']');
     } finally {
       setSaving(false);
     }
