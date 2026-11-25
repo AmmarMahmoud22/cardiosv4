@@ -51,12 +51,62 @@ export default function BillingModal({
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  // Fixed once per modal session so a retry targets the same documents instead of creating new ones.
-  const sessionRef = useRef<{ id: string; number: string; at: string } | null>(null);
+  // Only the invoice id and number are remembered (never clinical data), so an uncertain save
+  // can be resumed with the same id after the modal is closed and reopened.
+  const pendingKey = `cardios_pending_invoice_${patientId}`;
+  const readPending = (): { id: string; number: string } | null => {
+    try {
+      const v = JSON.parse(sessionStorage.getItem(pendingKey) || 'null');
+      return v && typeof v.id === 'string' && typeof v.number === 'string' ? v : null;
+    } catch {
+      return null;
+    }
+  };
+  const sessionRef = useRef<{ id: string; number: string; at: string; resumed: boolean } | null>(null);
   if (!sessionRef.current) {
+    const pending = readPending();
     const rnd = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-    sessionRef.current = { id: 'inv_' + rnd, number: `INV-${Date.now().toString().slice(-6)}`, at: new Date().toISOString() };
+    sessionRef.current = {
+      id: pending?.id ?? 'inv_' + rnd,
+      number: pending?.number ?? `INV-${Date.now().toString().slice(-6)}`,
+      at: new Date().toISOString(),
+      resumed: !!pending
+    };
   }
+  const [outcome, setOutcome] = useState<'idle' | 'failed' | 'unknown' | 'resumed'>('idle');
+  const [failText, setFailText] = useState('');
+  const [closeWarn, setCloseWarn] = useState(false);
+  const [savedInfo, setSavedInfo] = useState<{ number: string; id: string; amount: unknown; label: string; recovered: boolean } | null>(null);
+  const locked = outcome === 'unknown';
+  const clearPending = () => {
+    try { sessionStorage.removeItem(pendingKey); } catch { /* ignore */ }
+  };
+  const showSaved = (data: any, recovered: boolean) => {
+    const { id, number } = sessionRef.current!;
+    setSavedInfo({ number: data?.invoiceNumber || number, id, amount: data?.patientPayable ?? data?.amount, label: data?.serviceLabel || '', recovered });
+    clearPending();
+    onSaved?.();
+  };
+  const requestClose = () => {
+    if (outcome === 'unknown' && !closeWarn) {
+      setCloseWarn(true);
+      return;
+    }
+    onClose();
+  };
+
+  // Reopened after an uncertain attempt: check whether that invoice was actually saved.
+  useEffect(() => {
+    if (!sessionRef.current?.resumed) return;
+    const { id } = sessionRef.current;
+    getDoc(doc(db, 'patients', patientId, 'invoices', id))
+      .then((snap) => {
+        if (snap.exists()) showSaved(snap.data(), true);
+        else setOutcome('resumed');
+      })
+      .catch(() => setOutcome('unknown'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!doctorId) return;
@@ -104,19 +154,21 @@ export default function BillingModal({
     }
     setSaving(true);
     setError('');
+    setCloseWarn(false);
     try {
       const { id: invoiceId, number: invoiceNumber, at: now } = sessionRef.current!;
       const patientInvoiceRef = doc(db, 'patients', patientId, 'invoices', invoiceId);
+      try { sessionStorage.setItem(pendingKey, JSON.stringify({ id: invoiceId, number: invoiceNumber })); } catch { /* ignore */ }
       // If an earlier attempt actually committed (lost response), do not write again.
-      let alreadySaved = false;
+      let existing: any = null;
       try {
-        alreadySaved = (await getDoc(patientInvoiceRef)).exists();
+        const snap = await getDoc(patientInvoiceRef);
+        existing = snap.exists() ? snap.data() : null;
       } catch {
-        alreadySaved = false;
+        existing = null;
       }
-      if (alreadySaved) {
-        onSaved?.();
-        onClose();
+      if (existing) {
+        showSaved(existing, true);
         return;
       }
 
@@ -156,11 +208,22 @@ export default function BillingModal({
       if (doctorId) batch.set(doc(db, 'clinic_invoices', invoiceId), invoicePayload);
       await batch.commit();
 
+      clearPending();
       onSaved?.();
       onClose();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving invoice:', err);
-      setError('تعذر حفظ الفاتورة، يرجى المحاولة مرة أخرى. [' + (await describeWriteError(err, patientId)) + ']');
+      const code = String(err?.code || '').replace('firestore/', '');
+      // Only an explicit server rejection proves nothing was written. Anything else may have committed.
+      const definite = ['permission-denied', 'invalid-argument', 'failed-precondition', 'not-found', 'already-exists', 'unauthenticated', 'out-of-range'].includes(code);
+      const diag = await describeWriteError(err, patientId);
+      setFailText(diag);
+      if (definite) {
+        clearPending();
+        setOutcome('failed');
+      } else {
+        setOutcome('unknown');
+      }
     } finally {
       setSaving(false);
     }
@@ -168,7 +231,7 @@ export default function BillingModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" dir="rtl">
-      <div className="absolute inset-0" onClick={onClose} />
+      <div className="absolute inset-0" onClick={requestClose} />
       <div className="relative z-10 bg-white rounded-3xl max-w-lg w-full border border-slate-200 shadow-2xl overflow-hidden max-h-[94vh] flex flex-col">
         <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -184,19 +247,56 @@ export default function BillingModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             className="w-8 h-8 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-slate-900 flex items-center justify-center cursor-pointer"
           >
             <X size={18} />
           </button>
         </div>
 
+        {savedInfo ? (
+          <div className="p-5 space-y-3 text-xs" data-testid="saved-panel">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl font-bold space-y-1">
+              <div>تم حفظ الفاتورة.</div>
+              <div>رقم الفاتورة: <span className="font-mono">{savedInfo.number}</span></div>
+              <div>المعرّف: <span className="font-mono break-all">{savedInfo.id}</span></div>
+              <div>المبلغ المحفوظ: <span className="font-mono">{String(savedInfo.amount ?? '-')}</span> ج.م {savedInfo.label ? `(${savedInfo.label})` : ''}</div>
+            </div>
+            {savedInfo.recovered && (
+              <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl font-semibold">
+                الفاتورة دي اتحفظت من محاولة سابقة رغم ظهور رسالة خطأ. القيم المحفوظة هي الموضّحة فوق، وأي تعديل عملته بعد كده في الشاشة لم يتم تطبيقه ولم يتم إنشاء فاتورة جديدة. لو محتاج تعديل، افتح الفاتورة المحفوظة من سجل الفواتير.
+              </div>
+            )}
+            <div className="flex justify-end">
+              <button type="button" onClick={onClose} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold cursor-pointer">إغلاق</button>
+            </div>
+          </div>
+        ) : (
         <form onSubmit={saveInvoice} className="p-5 overflow-y-auto space-y-4 text-xs">
+          {outcome === 'failed' && (
+            <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl font-semibold" data-testid="fail-definite">
+              تعذر حفظ الفاتورة: الخادم رفض العملية ولم يتم حفظ أي شيء. رقم الفاتورة المحجوز {sessionRef.current!.number}. يمكنك المحاولة مرة أخرى. [{failText}]
+            </div>
+          )}
+          {outcome === 'unknown' && (
+            <div className="p-2.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl font-semibold space-y-1" data-testid="fail-unknown">
+              <div>مش متأكدين إن الفاتورة اتحفظت. ممكن تكون اتحفظت فعلاً رغم ظهور الخطأ، فلا تفتح فاتورة جديدة.</div>
+              <div>رقم الفاتورة: <span className="font-mono">{sessionRef.current!.number}</span> | المعرّف: <span className="font-mono break-all">{sessionRef.current!.id}</span></div>
+              <div>اتقفل التعديل عشان ما يحصلش تكرار. اضغط "تأكيد حالة الفاتورة" وهنتحقق، ولو لم نجدها هنحفظها بنفس الرقم. {failText ? `[${failText}]` : ''}</div>
+              {closeWarn && <div className="text-rose-700">لسه الحالة غير مؤكدة. لو أغلقت وفتحت الفاتورة تاني هنكمل بنفس الرقم. اضغط إغلاق مرة تانية للخروج.</div>}
+            </div>
+          )}
+          {outcome === 'resumed' && (
+            <div className="p-2.5 bg-amber-50 border border-amber-300 text-amber-900 rounded-xl font-semibold" data-testid="resumed">
+              فيه محاولة سابقة غير مؤكدة بالرقم {sessionRef.current!.number}. لم نجد فاتورة محفوظة بها، وهنستخدم نفس الرقم عشان ما تتكررش.
+            </div>
+          )}
           {error && (
             <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl font-semibold">
               {error}
             </div>
           )}
+          <fieldset disabled={locked} className="space-y-4 min-w-0 border-0 p-0 m-0">
 
           {/* Service Presets */}
           <div>
@@ -379,10 +479,11 @@ export default function BillingModal({
             </div>
           </div>
 
+          </fieldset>
           <div className="flex items-center justify-end gap-2 pt-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={requestClose}
               className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold cursor-pointer"
             >
               إلغاء
@@ -393,10 +494,11 @@ export default function BillingModal({
               className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl font-bold shadow-sm flex items-center gap-1.5 cursor-pointer"
             >
               <CheckCircle2 size={15} />
-              <span>{saving ? 'جاري الحفظ...' : 'اعتماد وحفظ الفاتورة'}</span>
+              <span>{saving ? 'جاري الحفظ...' : locked ? 'تأكيد حالة الفاتورة' : 'اعتماد وحفظ الفاتورة'}</span>
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   );
