@@ -1,6 +1,7 @@
 import React, {useState, useEffect} from 'react';
 import {addDoc, collection, query, orderBy, onSnapshot, doc, getDoc} from 'firebase/firestore';
 import {db} from '../lib/firebase';
+import {describeWriteError} from '../lib/writeDiagnostics';
 import {LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer} from 'recharts';
 import {
   QrCode,
@@ -189,7 +190,7 @@ export default function PatientProfile({
       setTimeout(() => setRxSyncSuccess(false), 3000);
     } catch (error) {
       console.error('Error saving prescription:', error);
-      setRxError('تعذر حفظ الروشتة، يرجى المحاولة ثانية.');
+      setRxError('تعذر حفظ الروشتة، يرجى المحاولة ثانية. [' + (await describeWriteError(error, patientId)) + ']');
     } finally {
       setSavingRx(false);
     }
