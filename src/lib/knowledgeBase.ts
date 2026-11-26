@@ -125,6 +125,45 @@ function computeLexicalScore(queryTokens: string[], chunkText: string): number {
   return Math.min(1, hits / Math.max(1, Math.min(queryTokens.length, 6)));
 }
 
+/**
+ * Firestore rules only allow these source fields:
+ * id, title, category, fileName, fileSize, pageCount, chunkCount, isActive, uploadedBy, createdAt.
+ * Map the app model to that shape on write and back on read.
+ */
+function sourceToFirestore(src: KnowledgeSource) {
+  return {
+    id: src.id,
+    title: src.title.slice(0, 300),
+    category: String(src.category || '').slice(0, 100),
+    fileName: String(src.fileName || '').slice(0, 255),
+    fileSize: src.fileSize,
+    pageCount: src.totalPages,
+    chunkCount: src.totalChunks,
+    isActive: src.isActive,
+    uploadedBy: String(src.uploadedBy || '').slice(0, 200),
+    createdAt: src.uploadedAt
+  };
+}
+
+function sourceFromFirestore(id: string, data: any): KnowledgeSource {
+  const ext = String(data.fileName || '').split('.').pop()?.toLowerCase();
+  const fileType = ext === 'txt' || ext === 'md' ? ext : 'pdf';
+  return {
+    id,
+    title: data.title || '',
+    fileName: data.fileName || '',
+    fileSize: data.fileSize || 0,
+    fileType,
+    category: data.category || '',
+    totalPages: data.totalPages ?? data.pageCount ?? 0,
+    totalChunks: data.totalChunks ?? data.chunkCount ?? 0,
+    isActive: data.isActive === true,
+    uploadedAt: data.uploadedAt || data.createdAt || '',
+    uploadedBy: data.uploadedBy || '',
+    hasEmbeddings: data.hasEmbeddings === true
+  } as KnowledgeSource;
+}
+
 // Local storage helpers as resilient cache
 function getLocalSources(): KnowledgeSource[] {
   try {
@@ -181,7 +220,7 @@ export function subscribeToKnowledgeSources(
       (snap) => {
         const list: KnowledgeSource[] = [];
         snap.forEach((docSnap) => {
-          list.push({ id: docSnap.id, ...(docSnap.data() as any) });
+          list.push(sourceFromFirestore(docSnap.id, docSnap.data()));
         });
         list.sort((a, b) => (b.uploadedAt || '').localeCompare(a.uploadedAt || ''));
         saveLocalSources(list);
@@ -333,9 +372,9 @@ export async function ingestKnowledgeFile(
   const existingChunks = getLocalChunks();
   saveLocalChunks([...chunkDocs, ...existingChunks]);
 
-  // Persist to Firestore in batches of 100
+  // Persist to Firestore in batches. Failures must be visible to the admin (never silent).
   try {
-    await setDoc(doc(db, SOURCES_COLLECTION, sourceId), sourceDoc);
+    await setDoc(doc(db, SOURCES_COLLECTION, sourceId), sourceToFirestore(sourceDoc));
 
     const FIRESTORE_BATCH_LIMIT = 80;
     for (let i = 0; i < chunkDocs.length; i += FIRESTORE_BATCH_LIMIT) {
@@ -352,8 +391,14 @@ export async function ingestKnowledgeFile(
         total: chunkDocs.length
       });
     }
-  } catch (err) {
-    console.warn('Firestore batch save warning (cached locally):', err);
+  } catch (err: any) {
+    console.error('Knowledge base save to Firestore FAILED:', err);
+    // Roll back the local cache so the UI does not show a source that was never saved.
+    saveLocalSources(getLocalSources().filter((s) => s.id !== sourceId));
+    saveLocalChunks(getLocalChunks().filter((c) => c.sourceId !== sourceId));
+    throw new Error(
+      `فشل حفظ المرجع في قاعدة البيانات / Failed to save to database: ${err?.code || ''} ${err?.message || err}`.trim()
+    );
   }
 
   onProgress?.({
@@ -376,9 +421,7 @@ export async function toggleKnowledgeSourceActive(source: KnowledgeSource): Prom
   );
   saveLocalSources(updated);
 
-  await setDoc(doc(db, SOURCES_COLLECTION, source.id), { isActive: nextActive }, { merge: true }).catch(
-    (err) => console.warn('Error toggling knowledge source:', err)
-  );
+  await setDoc(doc(db, SOURCES_COLLECTION, source.id), { isActive: nextActive }, { merge: true });
 }
 
 /**
@@ -435,14 +478,11 @@ async function loadActiveKnowledgeData(): Promise<{
   let chunks: KnowledgeChunk[] = [];
 
   try {
-    const sSnap = await getDocs(collection(db, SOURCES_COLLECTION));
-    if (!sSnap.empty) {
-      sources = sSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as KnowledgeSource));
-      saveLocalSources(sources);
-    } else {
-      sources = getLocalSources();
-    }
-  } catch {
+    // Constrained query: rules only allow listing sources with isActive == true for non-admins.
+    const sSnap = await getDocs(query(collection(db, SOURCES_COLLECTION), where('isActive', '==', true)));
+    sources = sSnap.docs.map((d) => sourceFromFirestore(d.id, d.data()));
+  } catch (e) {
+    console.warn('Knowledge sources read failed:', e);
     sources = getLocalSources();
   }
 
@@ -454,15 +494,17 @@ async function loadActiveKnowledgeData(): Promise<{
   const activeIds = new Set(activeSources.map((s) => s.id));
 
   try {
-    const cSnap = await getDocs(collection(db, CHUNKS_COLLECTION));
-    if (!cSnap.empty) {
-      chunks = cSnap.docs
-        .map((d) => ({ id: d.id, ...(d.data() as any) } as KnowledgeChunk))
-        .filter((c) => activeIds.has(c.sourceId));
-    } else {
-      chunks = getLocalChunks().filter((c) => activeIds.has(c.sourceId));
-    }
-  } catch {
+    // One constrained query per active source (rules need a sourceId constraint).
+    const results = await Promise.all(
+      activeSources.map((s) =>
+        getDocs(query(collection(db, CHUNKS_COLLECTION), where('sourceId', '==', s.id)))
+      )
+    );
+    chunks = results
+      .flatMap((snap) => snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as KnowledgeChunk)))
+      .filter((c) => activeIds.has(c.sourceId));
+  } catch (e) {
+    console.warn('Knowledge chunks read failed:', e);
     chunks = getLocalChunks().filter((c) => activeIds.has(c.sourceId));
   }
 
@@ -539,3 +581,4 @@ export async function retrieveRelevantChunks(
     totalChunkCount: activeChunks.length
   };
 }
+
