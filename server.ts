@@ -234,6 +234,34 @@ app.post('/api/ai/embed', requireUser, async (req, res) => {
 });
 
 /**
+ * Translate/expand a (usually Arabic) clinical question into English medical keywords
+ * so keyword retrieval can match English guideline text. Never answers the question.
+ */
+app.post('/api/ai/expand-query', requireUser, async (req, res) => {
+  const text = String((req.body as any)?.text || '').slice(0, 600);
+  if (!text.trim()) return res.status(400).json({ error: 'text is required' });
+  if (!getApiKey()) return res.status(503).json({ error: 'GEMINI_API_KEY is not configured on server' });
+  try {
+    const response = (await Promise.race([
+      getAiClient().models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents:
+          'Translate this clinical question to English and add 10 to 15 related English cardiology guideline keywords ' +
+          '(synonyms, standard terms, thresholds, drug classes). Output ONE line of plain text only: the English translation ' +
+          'followed by the keywords separated by spaces. Do not answer the question.\n\nQuestion: ' + text,
+        config: { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } },
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000)),
+    ])) as any;
+    const english = String(response.text || '').replace(/\s+/g, ' ').trim().slice(0, 600);
+    res.json({ english });
+  } catch (err: any) {
+    console.warn('expand-query failed:', err?.message || err);
+    res.status(503).json({ error: 'expand failed' });
+  }
+});
+
+/**
  * Grounded Cardiology RAG Chat Endpoint
  * Enforces:
  * 1. Cardiology-only domain guardrails
@@ -536,3 +564,4 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+
