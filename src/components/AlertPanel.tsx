@@ -3,7 +3,7 @@ import {collection, query, where, onSnapshot, updateDoc, doc} from 'firebase/fir
 import {onAuthStateChanged} from 'firebase/auth';
 import {db, auth} from '../lib/firebase';
 import {StaffRole} from '../types/clinic';
-import {AlertCircle, CheckCircle, ShieldCheck} from 'lucide-react';
+import {AlertCircle, CheckCircle, ShieldCheck, MessageCircle} from 'lucide-react';
 
 export default function AlertPanel({
   doctorId = '',
@@ -37,6 +37,41 @@ export default function AlertPanel({
     });
   }, [doctorId, staffRole, authUid]);
 
+  // Unread patient messages (seen state is kept in this browser only)
+  const [patientMsgs, setPatientMsgs] = useState<any[]>([]);
+  const [seenMsgs, setSeenMsgs] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('cardios_seen_msgs') || '{}'); } catch { return {}; }
+  });
+
+  useEffect(() => {
+    if (!doctorId || !authUid || staffRole === 'receptionist') {
+      setPatientMsgs([]);
+      return;
+    }
+    const q = query(collection(db, 'messages'), where('doctorId', '==', doctorId));
+    return onSnapshot(q, (snapshot) => {
+      setPatientMsgs(snapshot.docs.map(d => ({id: d.id, ...d.data()})).filter((m: any) => m.sender === 'patient'));
+    }, (err) => console.warn('Patient messages listener error:', err));
+  }, [doctorId, staffRole, authUid]);
+
+  const unreadByPatient = Object.values(
+    patientMsgs.reduce((acc: Record<string, any>, m: any) => {
+      const seen = seenMsgs[m.patientId] || '';
+      if (String(m.timestamp || '') <= seen) return acc;
+      const cur = acc[m.patientId] || {patientId: m.patientId, patientName: m.patientName, count: 0, last: '', text: ''};
+      cur.count += 1;
+      if (String(m.timestamp || '') > cur.last) { cur.last = String(m.timestamp || ''); cur.text = m.text; }
+      acc[m.patientId] = cur;
+      return acc;
+    }, {})
+  ) as any[];
+
+  const markMsgsSeen = (patientId: string, last: string) => {
+    const next = {...seenMsgs, [patientId]: last};
+    setSeenMsgs(next);
+    try { localStorage.setItem('cardios_seen_msgs', JSON.stringify(next)); } catch { /* ignore */ }
+  };
+
   const acknowledgeAlert = async (id: string) => {
     await updateDoc(doc(db, 'vitals', id), {status: 'acknowledged'});
   };
@@ -56,6 +91,28 @@ export default function AlertPanel({
           </span>
         )}
       </div>
+
+      {unreadByPatient.length > 0 && (
+        <div className="space-y-2.5 mb-4">
+          {unreadByPatient.map((u: any) => (
+            <div key={u.patientId} className="p-3.5 border-r-4 border-blue-500 bg-blue-50/80 rounded-2xl flex items-center justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <MessageCircle className="text-blue-600 mt-0.5 shrink-0" size={16} />
+                <div>
+                  <p className="font-bold text-xs text-blue-900">رسالة جديدة من المريض: {u.patientName || u.patientId} ({u.count})</p>
+                  <p className="text-[11px] text-slate-600 mt-0.5">{u.text} • افتح ملف المريض للرد</p>
+                </div>
+              </div>
+              <button
+                onClick={() => markMsgsSeen(u.patientId, u.last)}
+                className="px-3 py-1.5 bg-white border border-blue-200 text-slate-700 font-bold text-xs rounded-xl shrink-0"
+              >
+                تم الاطلاع
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {activeAlerts.length > 0 ? (
         <div className="space-y-2.5">
