@@ -17,6 +17,7 @@ interface Medication {
   dosage: string;
   instructions: string;
   duration: string;
+  reminderTime?: string;
 }
 
 const CARDIOLOGY_DRUGS = [
@@ -50,6 +51,7 @@ export default function PrescriptionModal({
   const [dosage, setDosage] = useState('');
   const [instructions, setInstructions] = useState('');
   const [duration, setDuration] = useState('3 months');
+  const [reminderTime, setReminderTime] = useState('');
   const [doctorNotes, setDoctorNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -93,9 +95,11 @@ export default function PrescriptionModal({
         name: searchDrug.trim(),
         dosage: dosage || 'As directed',
         instructions: instructions || 'Follow doctor instructions',
-        duration: duration || '1 month'
+        duration: duration || '1 month',
+        ...(reminderTime ? {reminderTime} : {})
       }
     ]);
+    setReminderTime('');
     setSearchDrug('');
     setDosage('');
     setInstructions('');
@@ -256,6 +260,16 @@ ${doctorNotes}
                   className="w-full text-xs p-2.5 border border-gray-300 rounded-lg"
                 />
               </div>
+
+              <div>
+                <input
+                  type="time"
+                  value={reminderTime}
+                  onChange={(e) => setReminderTime(e.target.value)}
+                  title="ميعاد الجرعة (تذكير المريض وتنبيه الطبيب عند التأخر)"
+                  className="w-full text-xs p-2.5 border border-gray-300 rounded-lg"
+                />
+              </div>
             </div>
 
             <div className="flex gap-2 items-center">
@@ -350,7 +364,7 @@ ${doctorNotes}
                       </span>
                     </div>
                     <p className="text-xs text-gray-600 pl-7">{m.instructions}</p>
-                    <p className="text-[11px] text-gray-400 pl-7">Duration: {m.duration}</p>
+                    <p className="text-[11px] text-gray-400 pl-7">Duration: {m.duration}{m.reminderTime ? ` • ميعاد الجرعة: ${m.reminderTime}` : ''}</p>
                   </div>
                   <button
                     onClick={() => handleRemoveMedication(i)}
