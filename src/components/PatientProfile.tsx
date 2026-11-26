@@ -81,7 +81,8 @@ export default function PatientProfile({
   const { language, direction, isRTL, t } = useLanguage();
   const isReceptionist = staffRole === 'receptionist';
   const [patient, setPatient] = useState<any>(null);
-  const [medications, setMedications] = useState<{name: string, dosage: string, instructions?: string}[]>([]);
+  const [medications, setMedications] = useState<{name: string, dosage: string, instructions?: string, reminderTime?: string}[]>([]);
+  const [medTime, setMedTime] = useState('');
   const [vitals, setVitals] = useState<{timestamp: string, systolic: number, diastolic: number, heartRate?: number}[]>([]);
   const [systolic, setSystolic] = useState('');
   const [diastolic, setDiastolic] = useState('');
@@ -160,12 +161,14 @@ export default function PatientProfile({
       const newMed = {
         name: medName.trim(),
         dosage: medDosage.trim(),
-        instructions: medInstructions.trim() || 'قرص يومياً حسب الإرشاد الطبي'
+        instructions: medInstructions.trim() || 'قرص يومياً حسب الإرشاد الطبي',
+        ...(medTime ? {reminderTime: medTime} : {})
       };
       setMedications([...medications, newMed]);
       setMedName('');
       setMedDosage('');
       setMedInstructions('');
+      setMedTime('');
     }
   };
 
@@ -572,6 +575,7 @@ export default function PatientProfile({
                       <strong className="font-bold text-slate-900 text-sm">{m.name}</strong>
                       <span className="text-blue-700 font-mono font-bold mr-2">[{m.dosage}]</span>
                       {m.instructions && <p className="text-slate-500 mt-0.5">{m.instructions}</p>}
+                      {m.reminderTime && <p className="text-amber-700 mt-0.5">⏰ ميعاد الجرعة: {m.reminderTime}</p>}
                     </div>
                   </div>
                   {!isReceptionist && (
@@ -634,6 +638,14 @@ export default function PatientProfile({
                     value={medInstructions}
                     onChange={(e) => setMedInstructions(e.target.value)}
                     placeholder="تعليمات التناول (مثال: قرص صباحاً)"
+                    className="sm:col-span-3 p-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  />
+                  <input
+                    type="time"
+                    value={medTime}
+                    onChange={(e) => setMedTime(e.target.value)}
+                    title="ميعاد الجرعة (تذكير المريض وتنبيه الطبيب عند التأخر)"
+                    aria-label="ميعاد الجرعة"
                     className="sm:col-span-3 p-2.5 text-xs bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500"
                   />
                   <button
