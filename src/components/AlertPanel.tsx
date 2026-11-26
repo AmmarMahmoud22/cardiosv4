@@ -32,7 +32,7 @@ export default function AlertPanel({
     return onSnapshot(q, (snapshot) => {
       const allAlerts = snapshot.docs
         .map(d => ({id: d.id, ...d.data()}))
-        .filter((a: any) => Number(a.systolic) > 140 && a.doctorId === doctorId);
+        .filter((a: any) => (Number(a.systolic) > 140 || Number(a.systolic) < 90 || Number(a.diastolic) < 60) && a.doctorId === doctorId);
       setAlerts(allAlerts);
     });
   }, [doctorId, staffRole, authUid]);
@@ -62,7 +62,7 @@ export default function AlertPanel({
           {activeAlerts.map(alert => (
             <div key={alert.id} className="p-3.5 border-r-4 border-red-500 bg-red-50/80 rounded-2xl flex items-center justify-between gap-3">
               <div>
-                <p className="font-bold text-xs text-red-900">قراءة ضغط مرتفعة: {alert.systolic}/{alert.diastolic} mmHg</p>
+                <p className="font-bold text-xs text-red-900">{(Number(alert.systolic) < 90 || Number(alert.diastolic) < 60) ? 'قراءة ضغط منخفضة' : 'قراءة ضغط مرتفعة'}: {alert.systolic}/{alert.diastolic} mmHg</p>
                 <p className="text-[11px] text-slate-600 mt-0.5">
                   المريض: {alert.patientName || alert.patientId || 'غير محدد'} • {alert.timestamp || 'اليوم'}
                 </p>
