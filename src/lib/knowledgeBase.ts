@@ -209,14 +209,17 @@ function saveLocalChunks(chunks: KnowledgeChunk[]) {
  * Subscribe to Knowledge Sources in real time
  */
 export function subscribeToKnowledgeSources(
-  callback: (sources: KnowledgeSource[]) => void
+  callback: (sources: KnowledgeSource[]) => void,
+  activeOnly = false
 ): () => void {
   const local = getLocalSources();
   if (local.length > 0) callback(local);
 
   try {
     const unsub = onSnapshot(
-      collection(db, SOURCES_COLLECTION),
+      activeOnly
+        ? query(collection(db, SOURCES_COLLECTION), where('isActive', '==', true))
+        : collection(db, SOURCES_COLLECTION),
       (snap) => {
         const list: KnowledgeSource[] = [];
         snap.forEach((docSnap) => {
@@ -581,4 +584,5 @@ export async function retrieveRelevantChunks(
     totalChunkCount: activeChunks.length
   };
 }
+
 
