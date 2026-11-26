@@ -291,6 +291,14 @@ export default function PatientMobileDashboard({
     const dia = Number(diastolic);
     if (!sys || !dia) return null;
 
+    if (sys < 90 || dia < 60) {
+      return {
+        label: 'انخفاض في ضغط الدم',
+        sub: 'القراءة أقل من المعدل الطبيعي، سيتم إشعار الطبيب. اجلس واشرب سوائل وراجع طبيبك عند الدوخة',
+        color: 'bg-purple-50 text-purple-800 border-purple-200',
+        badge: 'bg-purple-600 text-white'
+      };
+    }
     if (sys >= 160 || dia >= 100) {
       return {
         label: 'ارتفاع حرج للضغط (المرحلة الثانية)',
@@ -352,7 +360,7 @@ export default function PatientMobileDashboard({
       });
 
       // Top-level alert doc if systolic > 140
-      if (sys > 140) {
+      if (sys > 140 || sys < 90 || dia < 60) {
         await addDoc(collection(db, 'vitals'), {
           patientId: selectedPatientId,
           doctorId: patientData?.doctorId || '',
@@ -365,7 +373,12 @@ export default function PatientMobileDashboard({
         });
       }
 
-      if (sys >= 150) {
+      if (sys < 90 || dia < 60) {
+        setFeedback({
+          type: 'alert',
+          message: 'تم تسجيل القياس. قراءة الضغط منخفضة، تم إرسال إشعار إلى لوحة تحكم طبيبك للمتابعة.'
+        });
+      } else if (sys >= 150) {
         setFeedback({
           type: 'alert',
           message: 'تم تسجيل القياس! نظراً لارتفاع قراءة الضغط، تم إرسال إشعار فوري إلى لوحة تحكم طبيبك للمتابعة.'
@@ -822,6 +835,7 @@ export default function PatientMobileDashboard({
                     <div key={v.id || i} className="p-3 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
                         <div className={`w-3 h-3 rounded-full ${
+                          (v.systolic < 90 || v.diastolic < 60) ? 'bg-purple-500' :
                           v.systolic >= 160 ? 'bg-red-500' :
                           v.systolic >= 140 ? 'bg-amber-500' :
                           'bg-emerald-500'
@@ -837,9 +851,9 @@ export default function PatientMobileDashboard({
                       </div>
 
                       <span className={`text-[10px] px-2 py-1 rounded-md font-bold ${
-                        v.systolic >= 140 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                        (v.systolic < 90 || v.diastolic < 60) ? 'bg-purple-100 text-purple-800' : v.systolic >= 140 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
                       }`}>
-                        {v.systolic >= 140 ? 'مرتفع' : 'مثالي'}
+                        {(v.systolic < 90 || v.diastolic < 60) ? 'منخفض' : v.systolic >= 140 ? 'مرتفع' : 'مثالي'}
                       </span>
                     </div>
                   ))
