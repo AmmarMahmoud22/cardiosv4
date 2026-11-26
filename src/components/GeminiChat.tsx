@@ -82,7 +82,7 @@ export default function GeminiChat({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const unsub = subscribeToKnowledgeSources(setKnowledgeSources);
+    const unsub = subscribeToKnowledgeSources(setKnowledgeSources, true);
     getKnowledgeSettings().then(setKnowledgeSettings);
     return () => unsub();
   }, []);
@@ -576,3 +576,4 @@ export default function GeminiChat({
     </>
   );
 }
+
