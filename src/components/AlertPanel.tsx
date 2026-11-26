@@ -1,9 +1,9 @@
 import React, {useState, useEffect} from 'react';
-import {collection, query, where, onSnapshot, updateDoc, doc} from 'firebase/firestore';
+import {collection, query, where, orderBy, limit, onSnapshot, updateDoc, doc} from 'firebase/firestore';
 import {onAuthStateChanged} from 'firebase/auth';
 import {db, auth} from '../lib/firebase';
 import {StaffRole} from '../types/clinic';
-import {AlertCircle, CheckCircle, ShieldCheck, MessageCircle} from 'lucide-react';
+import {AlertCircle, CheckCircle, ShieldCheck, MessageCircle, Clock} from 'lucide-react';
 
 export default function AlertPanel({
   doctorId = '',
@@ -54,6 +54,63 @@ export default function AlertPanel({
     }, (err) => console.warn('Patient messages listener error:', err));
   }, [doctorId, staffRole, authUid]);
 
+  // Missed doses: latest prescription per patient, reminder time passed (10 min grace) and no "taken" message today
+  const [patientList, setPatientList] = useState<any[]>([]);
+  const [rxByPatient, setRxByPatient] = useState<Record<string, any[]>>({});
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (!doctorId || !authUid || staffRole === 'receptionist') {
+      setPatientList([]);
+      return;
+    }
+    const q = query(collection(db, 'patients'), where('doctorId', '==', doctorId));
+    return onSnapshot(q, (snapshot) => {
+      setPatientList(snapshot.docs.map(d => ({id: d.id, name: (d.data() as any).name})));
+    }, (err) => console.warn('Patients listener error:', err));
+  }, [doctorId, staffRole, authUid]);
+
+  const patientIdsKey = patientList.map(p => p.id).join(',');
+  useEffect(() => {
+    if (!patientIdsKey) {
+      setRxByPatient({});
+      return;
+    }
+    const unsubs = patientIdsKey.split(',').map(pid =>
+      onSnapshot(
+        query(collection(db, 'patients', pid, 'prescriptions'), orderBy('createdAt', 'desc'), limit(1)),
+        (snap) => {
+          const meds = snap.empty ? [] : ((snap.docs[0].data() as any).medications || []);
+          setRxByPatient(prev => ({...prev, [pid]: Array.isArray(meds) ? meds : []}));
+        },
+        (err) => console.warn('Prescription listener error:', err)
+      )
+    );
+    return () => unsubs.forEach(u => u());
+  }, [patientIdsKey]);
+
+  const TAKEN_PREFIX = '💊 تم أخذ الدواء: ';
+  const nowD = new Date(nowTick);
+  const nowMin = nowD.getHours() * 60 + nowD.getMinutes();
+  const missedDoses: any[] = [];
+  patientList.forEach(p => {
+    (rxByPatient[p.id] || []).forEach((m: any) => {
+      const t = typeof m?.reminderTime === 'string' ? m.reminderTime : '';
+      if (!/^\d{2}:\d{2}$/.test(t)) return;
+      if (nowMin < Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)) + 10) return;
+      const taken = patientMsgs.some((x: any) =>
+        x.patientId === p.id && typeof x.text === 'string' && x.text.startsWith(TAKEN_PREFIX + m.name + ' (') &&
+        x.timestamp && new Date(x.timestamp).toDateString() === nowD.toDateString()
+      );
+      if (!taken) missedDoses.push({key: p.id + m.name, patientName: p.name || p.id, med: m.name, time: t});
+    });
+  });
+
   const unreadByPatient = Object.values(
     patientMsgs.reduce((acc: Record<string, any>, m: any) => {
       const seen = seenMsgs[m.patientId] || '';
@@ -91,6 +148,20 @@ export default function AlertPanel({
           </span>
         )}
       </div>
+
+      {missedDoses.length > 0 && (
+        <div className="space-y-2.5 mb-4">
+          {missedDoses.map((d: any) => (
+            <div key={d.key} className="p-3.5 border-r-4 border-amber-500 bg-amber-50/80 rounded-2xl flex items-start gap-2">
+              <Clock className="text-amber-600 mt-0.5 shrink-0" size={16} />
+              <div>
+                <p className="font-bold text-xs text-amber-900">جرعة فائتة: {d.med} • المريض: {d.patientName}</p>
+                <p className="text-[11px] text-slate-600 mt-0.5">ميعاد الجرعة {d.time} ولم يسجّل المريض أخذها اليوم</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {unreadByPatient.length > 0 && (
         <div className="space-y-2.5 mb-4">
