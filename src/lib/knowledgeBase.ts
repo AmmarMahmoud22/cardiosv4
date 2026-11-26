@@ -550,7 +550,7 @@ export async function retrieveRelevantChunks(
   const queryTokens = tokenizeText(queryText);
 
   const scored: RetrievedChunk[] = activeChunks.map((chunk) => {
-    const lexicalScore = computeLexicalScore(queryTokens, `${chunk.sourceTitle} ${chunk.text}`);
+    const lexicalScore = computeLexicalScore(queryTokens, chunk.text);
     let semanticScore = 0;
 
     if (queryEmbedding && Array.isArray(chunk.embedding) && chunk.embedding.length === queryEmbedding.length) {
