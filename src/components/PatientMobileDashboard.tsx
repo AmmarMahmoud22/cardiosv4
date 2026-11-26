@@ -44,6 +44,7 @@ interface MedicationSchedule {
   timeSlot: 'Morning' | 'Afternoon' | 'Evening';
   instructions: string;
   taken: boolean;
+  reminderTime?: string;
 }
 
 export default function PatientMobileDashboard({
@@ -102,6 +103,11 @@ export default function PatientMobileDashboard({
 
   // Synced Medications from Doctor
   const [meds, setMeds] = useState<MedicationSchedule[]>([]);
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
   const [showQRModal, setShowQRModal] = useState(false);
 
   // Direct Doctor-Patient Chat State
@@ -207,8 +213,11 @@ export default function PatientMobileDashboard({
             name: m.name,
             dosage: m.dosage || 'حسب الإرشاد',
             instructions: m.instructions || 'قرص يومياً حسب تعليمات د. القلب',
-            timeSlot: idx % 3 === 0 ? 'Morning' : idx % 3 === 1 ? 'Afternoon' : 'Evening',
-            taken: false
+            timeSlot: (typeof m.reminderTime === 'string' && /^\d{2}:\d{2}$/.test(m.reminderTime))
+              ? (Number(m.reminderTime.slice(0, 2)) < 12 ? 'Morning' : Number(m.reminderTime.slice(0, 2)) < 17 ? 'Afternoon' : 'Evening')
+              : (idx % 3 === 0 ? 'Morning' : idx % 3 === 1 ? 'Afternoon' : 'Evening'),
+            taken: false,
+            reminderTime: typeof m.reminderTime === 'string' ? m.reminderTime : ''
           }));
           setMeds(syncedMeds);
         } else {
@@ -401,11 +410,40 @@ export default function PatientMobileDashboard({
     }
   };
 
-  const toggleMedication = (id: string) => {
-    setMeds(meds.map(m => m.id === id ? {...m, taken: !m.taken} : m));
+  // Taken doses are saved as a patient message so the doctor sees them (no extra DB permissions needed)
+  const TAKEN_PREFIX = '💊 تم أخذ الدواء: ';
+  const todayKey = new Date(nowTick).toDateString();
+  const takenToday = (name: string) => chatMessages.some((m: any) =>
+    m.sender === 'patient' && typeof m.text === 'string' && m.text.startsWith(TAKEN_PREFIX + name + ' (') &&
+    m.timestamp && new Date(m.timestamp).toDateString() === todayKey
+  );
+  const medsView = meds.map(m => ({...m, taken: takenToday(m.name)}));
+  const nowMinutes = new Date(nowTick).getHours() * 60 + new Date(nowTick).getMinutes();
+  const isOverdue = (m: {reminderTime?: string; taken: boolean}) => {
+    if (m.taken || !m.reminderTime || !/^\d{2}:\d{2}$/.test(m.reminderTime)) return false;
+    return nowMinutes >= Number(m.reminderTime.slice(0, 2)) * 60 + Number(m.reminderTime.slice(3, 5));
+  };
+  const overdueMeds = medsView.filter(isOverdue);
+
+  const toggleMedication = async (id: string) => {
+    const med = medsView.find(m => m.id === id);
+    if (!med || med.taken) return;
+    try {
+      const now = new Date();
+      await addDoc(collection(db, 'messages'), {
+        patientId: selectedPatientId,
+        doctorId: patientData?.doctorId || '',
+        patientName,
+        sender: 'patient',
+        text: TAKEN_PREFIX + med.name + ' (' + now.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) + ')',
+        timestamp: now.toISOString()
+      });
+    } catch {
+      setFeedback({ type: 'alert', message: 'فشل في تسجيل الجرعة، برجاء المحاولة لاحقاً.' });
+    }
   };
 
-  const completedCount = meds.filter(m => m.taken).length;
+  const completedCount = medsView.filter(m => m.taken).length;
   const adherencePercent = meds.length > 0 ? Math.round((completedCount / meds.length) * 100) : 0;
 
   // 1. Verifying Token / Session State
@@ -894,7 +932,12 @@ export default function PatientMobileDashboard({
 
               {/* Medication List */}
               <div className="space-y-2.5">
-                {meds.map((med) => (
+                {overdueMeds.length > 0 && (
+                  <div className="p-3 rounded-2xl border border-red-300 bg-red-50 text-red-800 text-xs font-bold">
+                    ⏰ فاتتك جرعة: {overdueMeds.map(m => `${m.name} (${m.reminderTime})`).join('، ')}. خذ الدواء وسجّله الآن.
+                  </div>
+                )}
+                {medsView.map((med) => (
                   <div
                     key={med.id}
                     onClick={() => toggleMedication(med.id)}
@@ -924,7 +967,7 @@ export default function PatientMobileDashboard({
                     </div>
 
                     <span className="text-[10px] font-bold px-2 py-1 rounded-md bg-gray-100 text-gray-600">
-                      {med.timeSlot === 'Morning' ? '🌅 صباحاً' : med.timeSlot === 'Afternoon' ? '☀️ ظهراً' : '🌙 مساءً'}
+                      {med.reminderTime ? `⏰ ${med.reminderTime}` : ''} {med.timeSlot === 'Morning' ? '🌅 صباحاً' : med.timeSlot === 'Afternoon' ? '☀️ ظهراً' : '🌙 مساءً'}{isOverdue(med) ? ' • فائتة' : ''}
                     </span>
                   </div>
                 ))}
