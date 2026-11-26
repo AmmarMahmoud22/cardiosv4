@@ -66,6 +66,26 @@ export async function fetchEmbeddings(texts: string[]): Promise<number[][] | nul
 }
 
 /**
+ * For Arabic questions, ask the backend (Gemini) for an English translation plus keywords,
+ * so retrieval can match English guideline text. Falls back to the original text on any failure.
+ */
+async function expandQueryToEnglish(text: string): Promise<string> {
+  if (!/[\u0600-\u06FF]/.test(text)) return '';
+  try {
+    const res = await authedFetch('/api/ai/expand-query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    if (!res.ok) return '';
+    const data = await res.json();
+    return typeof data.english === 'string' ? data.english : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Cosine similarity between two numeric vectors
  */
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -526,7 +546,11 @@ export async function retrieveRelevantChunks(
   activeSourceCount: number;
   totalChunkCount: number;
 }> {
-  const { activeSources, activeChunks } = await loadActiveKnowledgeData();
+  const [{ activeSources, activeChunks }, englishQuery] = await Promise.all([
+    loadActiveKnowledgeData(),
+    expandQueryToEnglish(queryText)
+  ]);
+  const searchText = englishQuery ? `${queryText} ${englishQuery}` : queryText;
 
   if (activeSources.length === 0 || activeChunks.length === 0) {
     return {
@@ -541,13 +565,13 @@ export async function retrieveRelevantChunks(
   let queryEmbedding: number[] | null = null;
 
   if (chunksWithEmbeddings) {
-    const res = await fetchEmbeddings([queryText]);
+    const res = await fetchEmbeddings([englishQuery || queryText]);
     if (res && res[0]) {
       queryEmbedding = res[0];
     }
   }
 
-  const queryTokens = tokenizeText(queryText);
+  const queryTokens = tokenizeText(searchText);
 
   const scored: RetrievedChunk[] = activeChunks.map((chunk) => {
     const lexicalScore = computeLexicalScore(queryTokens, chunk.text);
@@ -584,5 +608,6 @@ export async function retrieveRelevantChunks(
     totalChunkCount: activeChunks.length
   };
 }
+
 
 
