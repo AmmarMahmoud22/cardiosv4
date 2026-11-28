@@ -90,10 +90,16 @@ export default function LabResultsModal({ patientId, onClose }: Props) {
         readByPatient: false
       };
 
-      // 1. Save in patient record
-      await updateDoc(doc(db, 'patients', patientId), {
-        doctorOrder: orderPayload
-      });
+      // 1. Save in patient record (best-effort: Firestore rules may reject the
+      // doctorOrder field; the order still reaches the patient through the
+      // notification below and the lab through lab_orders)
+      try {
+        await updateDoc(doc(db, 'patients', patientId), {
+          doctorOrder: orderPayload
+        });
+      } catch (orderFieldErr) {
+        console.warn('Notice saving doctorOrder field:', orderFieldErr);
+      }
 
       // 2. Dispatch alert notification to patient's phone
       await addDoc(collection(db, `patients/${patientId}/notifications`), {
