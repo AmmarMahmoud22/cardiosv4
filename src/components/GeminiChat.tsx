@@ -25,6 +25,8 @@ import {
   DEFAULT_KNOWLEDGE_SETTINGS
 } from '../lib/knowledgeBase';
 import { authedFetch } from '../lib/apiClient';
+import { doc, updateDoc, increment } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 
 interface ChatMessage {
   role: 'user' | 'model';
@@ -196,6 +198,16 @@ export default function GeminiChat({
       });
 
       const data = await response.json();
+
+      // Count this AI question against the clinic's monthly quota. The security
+      // rules allow a doctor to update aiQueriesUsed on their own record.
+      const chatUser = auth.currentUser;
+      if (response.ok && chatUser) {
+        updateDoc(doc(db, 'doctors', chatUser.uid), {
+          aiQueriesUsed: increment(1),
+          updatedAt: new Date().toISOString()
+        }).catch((err) => console.warn('AI usage counter note:', err));
+      }
       const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       setMessages([
         ...newMessages,
