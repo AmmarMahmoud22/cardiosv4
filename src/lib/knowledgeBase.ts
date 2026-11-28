@@ -123,26 +123,52 @@ function tokenizeText(text: string): string[] {
     .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
 }
 
-function computeLexicalScore(queryTokens: string[], chunkText: string): number {
-  if (queryTokens.length === 0) return 0;
-  const chunkTokens = new Set(tokenizeText(chunkText));
-  if (chunkTokens.size === 0) return 0;
+/**
+ * IDF weighting over the active chunk corpus. Rare query terms (drug names,
+ * guideline-specific phrases) count far more than common words, so repeated
+ * header/title chunks can no longer saturate the score by matching generic
+ * tokens like "cardiac", "guidelines" or "blood".
+ */
+function buildIdfIndex(chunkTokenSets: Set<string>[]): { idf: Map<string, number>; unseenIdf: number } {
+  const n = chunkTokenSets.length || 1;
+  const df = new Map<string, number>();
+  for (const cts of chunkTokenSets) {
+    for (const t of cts) df.set(t, (df.get(t) || 0) + 1);
+  }
+  const idf = new Map<string, number>();
+  for (const [t, c] of df) idf.set(t, Math.log(1 + n / (1 + c)));
+  // A query token absent from the corpus is treated as maximally rare.
+  return { idf, unseenIdf: Math.log(1 + n) };
+}
 
-  let hits = 0;
+function computeLexicalScore(
+  queryTokens: string[],
+  chunkTokens: Set<string>,
+  idf: Map<string, number>,
+  unseenIdf: number
+): number {
+  if (queryTokens.length === 0 || chunkTokens.size === 0) return 0;
+  const idfOf = (t: string) => idf.get(t) ?? unseenIdf;
+
+  let total = 0;
+  for (const qt of queryTokens) total += idfOf(qt);
+  if (total <= 0) return 0;
+
+  let got = 0;
   for (const qt of queryTokens) {
     if (chunkTokens.has(qt)) {
-      hits += 1;
+      got += idfOf(qt);
     } else {
       // Partial stem/prefix match for medical terms
       for (const ct of chunkTokens) {
         if (ct.length >= 4 && qt.length >= 4 && (ct.includes(qt) || qt.includes(ct))) {
-          hits += 0.6;
+          got += 0.6 * idfOf(qt);
           break;
         }
       }
     }
   }
-  return Math.min(1, hits / Math.max(1, Math.min(queryTokens.length, 6)));
+  return Math.min(1, got / total);
 }
 
 /**
@@ -572,9 +598,11 @@ export async function retrieveRelevantChunks(
   }
 
   const queryTokens = tokenizeText(searchText);
+  const chunkTokenSets = activeChunks.map((c) => new Set(tokenizeText(c.text || '')));
+  const { idf, unseenIdf } = buildIdfIndex(chunkTokenSets);
 
-  const scored: RetrievedChunk[] = activeChunks.map((chunk) => {
-    const lexicalScore = computeLexicalScore(queryTokens, chunk.text);
+  const scored: RetrievedChunk[] = activeChunks.map((chunk, chunkIdx) => {
+    const lexicalScore = computeLexicalScore(queryTokens, chunkTokenSets[chunkIdx], idf, unseenIdf);
     let semanticScore = 0;
 
     if (queryEmbedding && Array.isArray(chunk.embedding) && chunk.embedding.length === queryEmbedding.length) {
