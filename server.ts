@@ -268,6 +268,42 @@ app.post('/api/ai/expand-query', requireUser, async (req, res) => {
  * 2. Uploaded Admin Knowledge Base grounding (when strictKnowledgeOnly is active)
  * 3. Mandatory Page Number + Evidence citations
  */
+// --- Emergency red-flag guardrail (fixed safety line; approved by platform owner) ---
+const EMERGENCY_SAFETY_LINE = `🚨 **تنبيه طارئ — احتمال حالة قلبية مهددة للحياة:**
+هذا العرض السريري قد يمثل حالة قلبية طارئة. تصرف فوراً وفق بروتوكول الطوارئ المعتمد ولا تعتمد على إجابة المساعد:
+• فعّل نظام الطوارئ الطبية (EMS) أو انقل المريض فوراً لأقرب قسم طوارئ مجهز بوحدة قسطرة.
+• أجرِ رسم قلب (ECG) خلال 10 دقائق، مع مراقبة العلامات الحيوية وسحب إنزيمات القلب (Troponin).
+• اتبع بروتوكول متلازمة الشريان التاجي الحادة (ACS) ومسار القسطرة العلاجية وفق إرشادات ESC/AHA.
+هذا تنبيه ثابت لأغراض السلامة ولا يغني عن الحكم الإكلينيكي للطبيب المعالج.`;
+
+const EMERGENCY_PATTERNS: RegExp[] = [
+  /ألم\s+(في\s+|ب)?ال?صدر/,
+  /وجع\s+(في\s+)?(ال)?صدر/,
+  /ضغط\s+على\s+الصدر/,
+  /جلطة/,
+  /احتشاء/,
+  /نوبة\s+قلبية/,
+  /سكتة\s+قلبية/,
+  /أزمة\s+قلبية/,
+  /توقف\s+(ال)?قلب/,
+  /ارتفاع\s+(مقطع\s+)?(st|اس\s+تي)/i,
+  /st[- ]?elevation/i,
+  /\bstemi\b/i,
+  /\bnstemi\b/i,
+  /chest\s+pain/i,
+  /heart\s+attack/i,
+  /cardiac\s+arrest/i,
+  /myocardial\s+infarction/i,
+  /acute\s+coronary/i,
+  /صدمة\s+قلبية/,
+  /cardiogenic\s+shock/i,
+];
+
+function isEmergencyPresentation(text: string): boolean {
+  const t = String(text || '');
+  return EMERGENCY_PATTERNS.some((re) => re.test(t));
+}
+
 app.post('/api/chat', requireUser, async (req, res) => {
   const {
     history,
@@ -287,11 +323,16 @@ app.post('/api/chat', requireUser, async (req, res) => {
   const strictKnowledge = knowledgeSettings?.strictKnowledgeOnly !== false;
   const requireCitation = knowledgeSettings?.requirePageCitation !== false;
 
+  const emergencyFlag = isEmergencyPresentation(String(message || ''));
+  const withSafety = (text: string): string =>
+    emergencyFlag ? `${EMERGENCY_SAFETY_LINE}\n\n---\n\n${text}` : text;
+
   // Guardrail 1: If Strict Knowledge Mode is enabled and NO files are uploaded/active
   if (strictKnowledge && activeSourceCount === 0) {
     return res.json({
-      response:
-        '⛔ **وضع المصادر المعتمدة الحصري مفعّل، ولا توجد مراجع طبية مرفوعة حالياً.**\n\nيرجى من المشرف العام (Admin) التوجه إلى **لوحة الإدارة ← حوكمة الذكاء الاصطناعي ← مصادر المعرفة (Knowledge Base)** ورفع ملفات الـ PDF/المراجع القلبية المعتمدة أولاً ليتمكن المساعد من الإجابة بالدليل ورقم الصفحة.',
+      response: withSafety(
+        '⛔ **وضع المصادر المعتمدة الحصري مفعّل، ولا توجد مراجع طبية مرفوعة حالياً.**\n\nيرجى من المشرف العام (Admin) التوجه إلى **لوحة الإدارة ← حوكمة الذكاء الاصطناعي ← مصادر المعرفة (Knowledge Base)** ورفع ملفات الـ PDF/المراجع القلبية المعتمدة أولاً ليتمكن المساعد من الإجابة بالدليل ورقم الصفحة.'
+      ),
       citations: [],
       refused: true,
     });
@@ -301,8 +342,9 @@ app.post('/api/chat', requireUser, async (req, res) => {
   const validChunks = Array.isArray(retrievedChunks) ? retrievedChunks : [];
   if (strictKnowledge && validChunks.length === 0) {
     return res.json({
-      response:
-        '⛔ **عذراً، لم أجد دليلاً في المصادر الطبية المرفوعة يجيب على هذا السؤال.**\n\nأنا مقيد حالياً بالإجابة فقط عن **أمراض القلب** ومن **المصادر المعتمدة المرفوعة في لوحة الأدمن** بالدليل ورقم الصفحة.',
+      response: withSafety(
+        '⛔ **عذراً، لم أجد دليلاً في المصادر الطبية المرفوعة يجيب على هذا السؤال.**\n\nأنا مقيد حالياً بالإجابة فقط عن **أمراض القلب** ومن **المصادر المعتمدة المرفوعة في لوحة الأدمن** بالدليل ورقم الصفحة.'
+      ),
       citations: [],
       refused: true,
     });
@@ -492,9 +534,9 @@ ${sourcesContextBlock}
     const citations = refused ? [] : Array.isArray(parsed.citations) ? parsed.citations : [];
 
     return res.json({
-      response:
-        parsed.answer ||
-        'عذراً، لم أتمكن من استخراج إجابة موثقة من المصادر المرفوعة.',
+      response: withSafety(
+        parsed.answer || 'عذراً، لم أتمكن من استخراج إجابة موثقة من المصادر المرفوعة.'
+      ),
       citations,
       refused,
     });
@@ -510,15 +552,18 @@ ${sourcesContextBlock}
       });
       if (matched.length === 0) {
         return res.json({
-          response:
-            '⛔ **عذراً، لم أجد دليلاً في المصادر الطبية المرفوعة يجيب على هذا السؤال.**\n\nأنا مقيد حالياً بالإجابة فقط عن **أمراض القلب** ومن **المصادر المعتمدة المرفوعة في لوحة الأدمن** بالدليل ورقم الصفحة.',
+          response: withSafety(
+            '⛔ **عذراً، لم أجد دليلاً في المصادر الطبية المرفوعة يجيب على هذا السؤال.**\n\nأنا مقيد حالياً بالإجابة فقط عن **أمراض القلب** ومن **المصادر المعتمدة المرفوعة في لوحة الأدمن** بالدليل ورقم الصفحة.'
+          ),
           citations: [],
           refused: true,
         });
       }
       const top = matched[0];
       return res.json({
-        response: `📄 **الدليل المباشر من المرجع (المصدر: ${top.sourceTitle} — صفحة ${top.pageNumber}):**\n\n"${String(top.text || '').slice(0, 500)}"`,
+        response: withSafety(
+          `📄 **الدليل المباشر من المرجع (المصدر: ${top.sourceTitle} — صفحة ${top.pageNumber}):**\n\n"${String(top.text || '').slice(0, 500)}"`
+        ),
         citations: [
           {
             sourceTitle: top.sourceTitle,
