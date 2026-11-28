@@ -78,7 +78,9 @@ interface LabHistoryRecord {
   troponin: string;
   bnp?: string;
   hb?: string;
+  notes?: string;
   labNotes?: string;
+  technicianName?: string;
   technician?: string;
   labName?: string;
   labCode?: string;
@@ -485,10 +487,26 @@ export default function LaboratoryPortal({
         status: isUrgent ? 'يحتاج مراجعة (Requires Review)' : 'مستقر (Stable Control)'
       });
 
-      // 2. Add history entry to lab_results subcollection
+      // 2. Add history entry to lab_results subcollection.
+      // Keys must match the firestore.rules isValidLabResult schema exactly
+      // (notes / technicianName; no hb or labNotes keys) or the write is denied.
       try {
         await addDoc(collection(db, `patients/${selectedPatientId}/lab_results`), {
-          ...formattedLabs,
+          ldl: formattedLabs.ldl,
+          hdl: formattedLabs.hdl,
+          creatinine: formattedLabs.creatinine,
+          egfr: formattedLabs.egfr,
+          potassium: formattedLabs.potassium,
+          hba1c: formattedLabs.hba1c,
+          troponin: formattedLabs.troponin,
+          bnp: formattedLabs.bnp,
+          notes: labNotes,
+          labName: formattedLabs.labName,
+          technicianName: technicianName,
+          labCode: formattedLabs.labCode,
+          labId: formattedLabs.labId,
+          attachment: formattedLabs.attachment,
+          updatedAt: formattedLabs.updatedAt,
           timestamp: serverTimestamp()
         });
       } catch (histErr) {
@@ -1956,7 +1974,7 @@ export default function LaboratoryPortal({
                               </div>
 
                               <span className="text-[11px] text-slate-500 font-medium">
-                                فني المختبر: {rec.technician || technicianName || 'فني المختبر'}
+                                فني المختبر: {rec.technicianName || rec.technician || technicianName || 'فني المختبر'}
                               </span>
                             </div>
 
@@ -1987,9 +2005,9 @@ export default function LaboratoryPortal({
                                 <span className="font-semibold text-slate-700 px-1">التروبونين:</span>
                                 <span className="font-mono font-bold">{rec.troponin}</span>
                               </div>
-                              {rec.labNotes && (
+                              {(rec.notes || rec.labNotes) && (
                                 <p className="text-[11px] text-slate-500 italic max-w-md">
-                                  "{rec.labNotes}"
+                                  "{rec.notes || rec.labNotes}"
                                 </p>
                               )}
                             </div>
