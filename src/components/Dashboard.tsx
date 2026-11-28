@@ -156,8 +156,40 @@ export default function Dashboard({
     urgent: boolean;
   }>>([]);
 
+  // Live lab notifications for this doctor (top-level notifications collection;
+  // rules allow listing where doctorId == auth uid). Sorted client-side to avoid
+  // requiring a composite index.
   useEffect(() => {
-    setMessagesList([]);
+    if (!currentDoctorId) {
+      setMessagesList([]);
+      return;
+    }
+    const notifQuery = query(collection(db, 'notifications'), where('doctorId', '==', currentDoctorId));
+    const unsub = onSnapshot(notifQuery, (snap) => {
+      const items = snap.docs
+        .map((d) => {
+          const data: any = d.data();
+          return {
+            id: d.id,
+            sender: data.technician || 'معمل التحاليل',
+            role: 'lab',
+            time: data.createdAt
+              ? new Date(data.createdAt).toLocaleString('ar-EG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+              : '',
+            patientName: data.patientName || '',
+            text: `${data.title ? data.title + ' — ' : ''}${data.message || ''}`,
+            urgent: !!data.urgent,
+            sortKey: String(data.createdAt || '')
+          };
+        })
+        .sort((a, b) => (a.sortKey < b.sortKey ? 1 : -1))
+        .slice(0, 50)
+        .map(({ sortKey, ...rest }) => rest);
+      setMessagesList(items);
+    }, (err) => {
+      console.warn('Lab notifications listener notice:', err);
+    });
+    return () => unsub();
   }, [currentDoctorId]);
 
   // Real-time listener for current doctor schedule & logo settings
