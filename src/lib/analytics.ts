@@ -1,5 +1,5 @@
 import {doc, getDoc, setDoc, updateDoc, increment, collection, onSnapshot, query, orderBy, limit} from 'firebase/firestore';
-import {db} from './firebase';
+import {db, auth} from './firebase';
 
 export interface AnalyticsMetrics {
   totalVisits: number;
@@ -167,7 +167,18 @@ export async function trackPageView(path = '/'): Promise<void> {
   };
   saveLocalEvent(event);
 
-  // Sync to Firestore
+  // Sync to Firestore. Security rules require a signed-in user for event writes,
+  // so wait for auth state to settle first; anonymous visits stay local-only.
+  try {
+    await auth.authStateReady();
+    if (!auth.currentUser) return;
+    await setDoc(doc(db, 'platform_analytics_events', event.id), event, {merge: true});
+  } catch (err) {
+    console.warn('Firestore analytics event sync note:', err);
+    return;
+  }
+
+  // Platform-wide metrics are admin-maintained; non-admin writes are denied by rules.
   try {
     const metricsDocRef = doc(db, 'platform_analytics', 'metrics');
     const snap = await getDoc(metricsDocRef);
@@ -180,10 +191,8 @@ export async function trackPageView(path = '/'): Promise<void> {
         lastUpdated: new Date().toISOString()
       });
     }
-
-    await setDoc(doc(db, 'platform_analytics_events', event.id), event, {merge: true});
   } catch (err) {
-    console.warn('Firestore analytics sync note:', err);
+    console.warn('Firestore analytics metrics sync note:', err);
   }
 }
 
@@ -210,6 +219,13 @@ export async function trackSignupAttempt(role: 'doctor' | 'lab', name: string, c
   };
   saveLocalEvent(event);
 
+  // Event first: platform metrics are admin-only, so a denied metrics write must
+  // not swallow the activity event (which signed-in users may create).
+  try {
+    await setDoc(doc(db, 'platform_analytics_events', event.id), event, {merge: true});
+  } catch (err) {
+    console.warn('Firestore signup event sync note:', err);
+  }
   try {
     const metricsDocRef = doc(db, 'platform_analytics', 'metrics');
     const snap = await getDoc(metricsDocRef);
@@ -223,9 +239,8 @@ export async function trackSignupAttempt(role: 'doctor' | 'lab', name: string, c
         lastUpdated: new Date().toISOString()
       });
     }
-    await setDoc(doc(db, 'platform_analytics_events', event.id), event, {merge: true});
   } catch (err) {
-    console.warn('Firestore signup sync note:', err);
+    console.warn('Firestore signup metrics sync note:', err);
   }
 }
 
