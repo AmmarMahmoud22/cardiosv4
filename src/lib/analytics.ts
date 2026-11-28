@@ -66,18 +66,38 @@ if (typeof window !== 'undefined') {
   }
 }
 
-function getDeviceLabel(): string {
+async function getDeviceLabel(): Promise<string> {
   if (typeof window === 'undefined') return 'Unknown';
   const ua = navigator.userAgent;
-  let device = 'Desktop';
-  if (/mobile/i.test(ua)) device = 'Mobile';
-  else if (/tablet|ipad/i.test(ua)) device = 'Tablet';
 
+  // Android tablets carry "Android" WITHOUT "Mobile"; iPads on iPadOS 13+
+  // send a Macintosh UA and are only distinguishable by touch support.
+  let device = 'Desktop';
+  if (/ipad|tablet|playbook|silk|kindle/i.test(ua)) device = 'Tablet';
+  else if (/android/i.test(ua) && !/mobile/i.test(ua)) device = 'Tablet';
+  else if (/mobile|iphone|ipod|phone/i.test(ua)) device = 'Mobile';
+  else if (/macintosh/i.test(ua) && (navigator.maxTouchPoints || 0) > 1) device = 'Tablet';
+
+  // Order matters: Edge, Opera and Samsung Internet all contain "Chrome" in
+  // their UA, so they must be tested before Chrome.
   let browser = 'Browser';
-  if (/chrome|crios/i.test(ua)) browser = 'Chrome';
-  else if (/safari/i.test(ua) && !/chrome/i.test(ua)) browser = 'Safari';
-  else if (/firefox/i.test(ua)) browser = 'Firefox';
-  else if (/edg/i.test(ua)) browser = 'Edge';
+  if (/edg(e|a|ios)?\//i.test(ua)) browser = 'Edge';
+  else if (/opr\/|opera/i.test(ua)) browser = 'Opera';
+  else if (/samsungbrowser/i.test(ua)) browser = 'Samsung Internet';
+  else if (/chrome|crios/i.test(ua)) browser = 'Chrome';
+  else if (/firefox|fxios/i.test(ua)) browser = 'Firefox';
+  else if (/safari/i.test(ua)) browser = 'Safari';
+
+  // Brave hides itself from the UA string (looks exactly like Chrome);
+  // it is only detectable through its own async API.
+  try {
+    const nav = navigator as any;
+    if (nav.brave && typeof nav.brave.isBrave === 'function' && (await nav.brave.isBrave())) {
+      browser = 'Brave';
+    }
+  } catch (e) {
+    // Brave detection unavailable
+  }
 
   return `${device} • ${browser}`;
 }
@@ -162,7 +182,7 @@ export async function trackPageView(path = '/'): Promise<void> {
     title: isNewUnique || !isSessionVisited ? 'زيارة جديدة للمنصة عبر الرابط' : 'تصفح صفحة عبر الرابط',
     details: `${path === '/' ? 'الصفحة الرئيسية' : path} • ${isNewUnique ? 'زائر جديد' : 'جلسة متصفح'}`,
     timestamp: new Date().toISOString(),
-    device: getDeviceLabel(),
+    device: await getDeviceLabel(),
     path
   };
   saveLocalEvent(event);
@@ -215,7 +235,7 @@ export async function trackSignupAttempt(role: 'doctor' | 'lab', name: string, c
     title,
     details: `${name} ${code ? `(كود: ${code})` : ''} • بانتظار اعتماد المشرف العام`,
     timestamp: new Date().toISOString(),
-    device: getDeviceLabel()
+    device: await getDeviceLabel()
   };
   saveLocalEvent(event);
 
@@ -251,7 +271,7 @@ export async function recordSystemActivityEvent(
   const newEvent: AnalyticsEvent = {
     id: event.id || `evt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     timestamp: event.timestamp || new Date().toISOString(),
-    device: event.device || getDeviceLabel(),
+    device: event.device || (await getDeviceLabel()),
     ...event
   };
   saveLocalEvent(newEvent);
